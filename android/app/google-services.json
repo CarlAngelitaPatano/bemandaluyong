@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "350180192875",
+    "project_id": "be-mandaluyong-4sight",
+    "storage_bucket": "be-mandaluyong-4sight.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:350180192875:android:5c32249b0c0381b25cf72e",
+        "android_client_info": {
+          "package_name": "com.example.be_mandaluyong"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAA9MLwufKO0lLWy7m_LVKSH9gU9Znp7RE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
