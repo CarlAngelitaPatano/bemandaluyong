@@ -11,6 +11,7 @@ import 'auth_pages.dart'; // RoleSelectPage (welcome screen) for logout
 import 'heritage.dart'; // TrailProgress, kChurches, HeritageTrailPage
 import 'theme.dart'; // AppTheme.cityRed
 import 'theme_controller.dart'; // light/dark/system setting
+import 'achievements.dart'; // TrailBadge, kBadges
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
 /// keyed per account). Shared so other screens (e.g. the home app bar) can
@@ -220,23 +221,6 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  Future<void> _changePassword() async {
-    final email = _user?.email;
-    if (email == null) return;
-    try {
-      await FirebaseAuth.instance.sendPasswordResetEmail(email: email);
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Password reset link sent to $email')),
-      );
-    } catch (_) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not send reset email.')),
-      );
-    }
-  }
-
   Future<void> _logout() async {
     await FirebaseAuth.instance.signOut();
     if (!mounted) return;
@@ -372,6 +356,29 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         const SizedBox(height: AppSpacing.xl),
 
+        // ----- Achievements -----
+        Text('Achievements', style: text.titleMedium),
+        const SizedBox(height: 2),
+        Text(
+          '${kBadges.where((b) => visited >= b.threshold).length} of '
+          '${kBadges.length} earned',
+          style: text.bodySmall?.copyWith(color: colors.outline),
+        ),
+        const SizedBox(height: AppSpacing.m),
+        SizedBox(
+          height: 110,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: kBadges.length,
+            separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.l),
+            itemBuilder: (context, i) => _BadgeTile(
+              badge: kBadges[i],
+              earned: visited >= kBadges[i].threshold,
+            ),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xl),
+
         // ----- Account -----
         Text('Account', style: text.titleMedium),
         const SizedBox(height: AppSpacing.s),
@@ -388,9 +395,12 @@ class _ProfilePageState extends State<ProfilePage> {
               ListTile(
                 leading: const Icon(Icons.lock_reset_outlined),
                 title: const Text('Change password'),
-                subtitle: const Text('Sends a reset link to your email'),
+                subtitle: const Text('Set a new password'),
                 trailing: const Icon(Icons.chevron_right),
-                onTap: _changePassword,
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ChangePasswordPage()),
+                ),
               ),
             ],
           ),
@@ -543,6 +553,241 @@ class _CreditRow extends StatelessWidget {
           Text(value,
               style: text.bodyMedium?.copyWith(color: colors.outline)),
         ],
+      ),
+    );
+  }
+}
+
+/// A real in-app "Change password" flow: verifies the current password
+/// (re-authentication) then updates the Firebase account password.
+class ChangePasswordPage extends StatefulWidget {
+  const ChangePasswordPage({super.key});
+
+  @override
+  State<ChangePasswordPage> createState() => _ChangePasswordPageState();
+}
+
+class _ChangePasswordPageState extends State<ChangePasswordPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _current = TextEditingController();
+  final _new = TextEditingController();
+  final _confirm = TextEditingController();
+  bool _obscureCurrent = true;
+  bool _obscureNew = true;
+  bool _obscureConfirm = true;
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _current.dispose();
+    _new.dispose();
+    _confirm.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    final user = FirebaseAuth.instance.currentUser;
+    final email = user?.email;
+    if (user == null || email == null) return;
+
+    setState(() => _loading = true);
+    try {
+      // Re-authenticate with the current password (required by Firebase).
+      final cred =
+          EmailAuthProvider.credential(email: email, password: _current.text);
+      await user.reauthenticateWithCredential(cred);
+      // Then set the new password.
+      await user.updatePassword(_new.text);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppTheme.successFor(Theme.of(context).brightness),
+          content: const Text('Password changed successfully'),
+        ),
+      );
+      Navigator.pop(context);
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return;
+      final msg = switch (e.code) {
+        'wrong-password' ||
+        'invalid-credential' =>
+          'Your current password is incorrect.',
+        'weak-password' =>
+          'The new password is too weak (use at least 6 characters).',
+        'requires-recent-login' =>
+          'For security, please log out and log in again, then try.',
+        'too-many-requests' =>
+          'Too many attempts. Please wait a moment and try again.',
+        _ => e.message ?? 'Could not change the password.',
+      };
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not change the password.')),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Widget _passwordField({
+    required TextEditingController controller,
+    required String label,
+    required bool obscure,
+    required VoidCallback onToggle,
+    required String? Function(String?) validator,
+  }) {
+    return TextFormField(
+      controller: controller,
+      obscureText: obscure,
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: const Icon(Icons.lock_outline),
+        suffixIcon: IconButton(
+          icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
+          onPressed: onToggle,
+        ),
+        border: const OutlineInputBorder(),
+      ),
+      validator: validator,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Change password')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          children: [
+            const Text(
+              'Enter your current password, then choose a new one '
+              '(at least 6 characters).',
+              style: TextStyle(height: 1.4),
+            ),
+            const SizedBox(height: AppSpacing.xl),
+            _passwordField(
+              controller: _current,
+              label: 'Current password',
+              obscure: _obscureCurrent,
+              onToggle: () =>
+                  setState(() => _obscureCurrent = !_obscureCurrent),
+              validator: (v) => (v == null || v.isEmpty)
+                  ? 'Enter your current password'
+                  : null,
+            ),
+            const SizedBox(height: AppSpacing.l),
+            _passwordField(
+              controller: _new,
+              label: 'New password',
+              obscure: _obscureNew,
+              onToggle: () => setState(() => _obscureNew = !_obscureNew),
+              validator: (v) {
+                if (v == null || v.length < 6) {
+                  return 'Use at least 6 characters';
+                }
+                if (v == _current.text) {
+                  return 'New password must be different';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: AppSpacing.l),
+            _passwordField(
+              controller: _confirm,
+              label: 'Confirm new password',
+              obscure: _obscureConfirm,
+              onToggle: () =>
+                  setState(() => _obscureConfirm = !_obscureConfirm),
+              validator: (v) =>
+                  v != _new.text ? 'Passwords do not match' : null,
+            ),
+            const SizedBox(height: AppSpacing.xxl),
+            FilledButton.icon(
+              onPressed: _loading ? null : _submit,
+              icon: _loading
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.check),
+              style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(54)),
+              label: Text(_loading ? 'Changing…' : 'Change password'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BadgeTile extends StatelessWidget {
+  const _BadgeTile({required this.badge, required this.earned});
+  final TrailBadge badge;
+  final bool earned;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final success = AppTheme.successFor(Theme.of(context).brightness);
+    return GestureDetector(
+      onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(earned
+              ? '${badge.title} — ${badge.desc}'
+              : 'Locked — ${badge.desc}'),
+        ),
+      ),
+      child: SizedBox(
+        width: 78,
+        child: Column(
+          children: [
+            Stack(
+              alignment: Alignment.bottomRight,
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: earned
+                      ? colors.tertiaryContainer
+                      : colors.surfaceContainerHighest,
+                  // Locked badges show a lock; earned badges show their icon.
+                  child: Icon(
+                    earned ? badge.icon : Icons.lock,
+                    color:
+                        earned ? colors.onTertiaryContainer : colors.outline,
+                  ),
+                ),
+                // Green check when the challenge is complete.
+                if (earned)
+                  CircleAvatar(
+                    radius: 9,
+                    backgroundColor: colors.surface,
+                    child: Icon(Icons.check_circle, size: 16, color: success),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              badge.title,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: text.labelSmall?.copyWith(
+                color: earned ? colors.onSurface : colors.outline,
+                fontWeight: earned ? FontWeight.w600 : FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

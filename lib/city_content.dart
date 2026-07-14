@@ -17,6 +17,10 @@ class CityItem {
   final String? url; // official web page — shows an Open website button
   final List<String>? steps; // requirements / how-to list
 
+  // Optional map location (used to show attractions on the map).
+  final double? lat;
+  final double? lng;
+
   const CityItem({
     required this.title,
     required this.tag,
@@ -27,6 +31,8 @@ class CityItem {
     this.phone,
     this.url,
     this.steps,
+    this.lat,
+    this.lng,
   });
 }
 

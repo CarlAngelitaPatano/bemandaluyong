@@ -14,6 +14,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'email_service.dart';
 import 'city_content.dart'; // for the shared LeadingThumb widget
 import 'theme.dart'; // design tokens (AppTheme.success, AppSpacing, AppRadius)
+import 'achievements.dart'; // trail badges + unlock celebration
 
 /// A heritage church in Mandaluyong.
 class Church {
@@ -627,6 +628,12 @@ class TrailProgress {
     visited.add(c.name);
     await _save();
   }
+
+  /// Unlocks the entire trail in memory (used by the demo account). Not saved
+  /// to storage, so it only lasts for the current session.
+  static void unlockAll() {
+    visited.addAll(kChurches.map((c) => c.name));
+  }
 }
 
 class HeritageTrailPage extends StatefulWidget {
@@ -692,31 +699,7 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
     final complete = TrailProgress.isComplete;
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Heritage Church Trail'),
-        actions: [
-          // TEMP: preview the certificate without finishing the trail.
-          // Remove this button before your final demo/release.
-          IconButton(
-            tooltip: 'Preview certificate',
-            icon: const Icon(Icons.workspace_premium_outlined),
-            onPressed: () {
-              final n = FirebaseAuth.instance.currentUser?.displayName;
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => CertificatePage(
-                    name: (n != null && n.trim().isNotEmpty)
-                        ? n.trim()
-                        : 'Juan Dela Cruz',
-                    preview: true,
-                  ),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
+      appBar: AppBar(title: const Text('Heritage Church Trail')),
       body: ListView(
         padding: const EdgeInsets.all(20),
         children: [
@@ -1006,14 +989,22 @@ class _VerifyVisitPageState extends State<VerifyVisitPage> {
           [_selfie!.path, _churchPhoto!.path],
         );
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: AppTheme.successFor(Theme.of(context).brightness),
-            content: Text(
-              'Verified! You were about ${meters.round()} m from the church.',
+        // Celebrate if this verification unlocked a new badge.
+        final badge = badgeForCount(TrailProgress.visited.length);
+        if (badge != null) {
+          await showBadgeUnlocked(context, badge);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor:
+                  AppTheme.successFor(Theme.of(context).brightness),
+              content: Text(
+                'Verified! You were about ${meters.round()} m from the church.',
+              ),
             ),
-          ),
-        );
+          );
+        }
+        if (!mounted) return;
         Navigator.pop(context);
       } else {
         setState(() {

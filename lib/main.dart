@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_options.dart';
 import 'report_concern_page.dart';
@@ -34,14 +35,39 @@ void main() async {
   await ThemeController.instance.load();
   // Show the intro only on first launch.
   final seenOnboarding = await Onboarding.seen();
-  runApp(BeMandaluyongApp(showOnboarding: !seenOnboarding));
+
+  // "Remember me": decide whether to skip login on this launch.
+  final prefs = await SharedPreferences.getInstance();
+  final remember = prefs.getBool('remember_me') ?? false;
+  final user = FirebaseAuth.instance.currentUser;
+  if (user != null && !remember) {
+    // Not remembered — force a fresh login next time.
+    await FirebaseAuth.instance.signOut();
+  }
+  final isDemo = user?.email?.toLowerCase() == kDemoEmail;
+  final autoLogin = remember &&
+      user != null &&
+      (user.emailVerified ||
+          isDemo ||
+          user.phoneNumber != null ||
+          user.providerData.any((p) => p.providerId == 'google.com'));
+
+  runApp(BeMandaluyongApp(
+    showOnboarding: !seenOnboarding,
+    startLoggedIn: autoLogin,
+  ));
 }
 
 /// Root of the app. Sets up the theme and the home screen.
 class BeMandaluyongApp extends StatelessWidget {
-  const BeMandaluyongApp({super.key, this.showOnboarding = false});
+  const BeMandaluyongApp({
+    super.key,
+    this.showOnboarding = false,
+    this.startLoggedIn = false,
+  });
 
   final bool showOnboarding;
+  final bool startLoggedIn;
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +82,7 @@ class BeMandaluyongApp extends StatelessWidget {
         themeMode: mode, // Light / Dark / Follow system
         home: showOnboarding
             ? const OnboardingPage()
-            : const RoleSelectPage(),
+            : (startLoggedIn ? const HomeShell() : const RoleSelectPage()),
       ),
     );
   }
@@ -85,6 +111,16 @@ class _HomeShellState extends State<HomeShell> {
   @override
   void initState() {
     super.initState();
+    // Demo account: keep the whole trail unlocked (also covers app restarts
+    // where the demo session is still signed in). Real accounts reload their
+    // actual saved progress, clearing any leftover demo unlock.
+    if (FirebaseAuth.instance.currentUser?.email?.toLowerCase() == kDemoEmail) {
+      TrailProgress.unlockAll();
+    } else {
+      TrailProgress.load().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
     _loadAvatar();
     _loadUnread();
   }
@@ -162,20 +198,6 @@ class _HomeShellState extends State<HomeShell> {
             ),
             onPressed: _openNotifications,
           ),
-          IconButton(
-            icon: const Icon(Icons.logout, color: AppTheme.cityRed),
-            tooltip: 'Log out',
-            onPressed: () async {
-              await FirebaseAuth.instance.signOut();
-              if (!context.mounted) return;
-              // Return to the login chooser, clearing the navigation stack.
-              Navigator.pushAndRemoveUntil(
-                context,
-                MaterialPageRoute(builder: (_) => const RoleSelectPage()),
-                (route) => false,
-              );
-            },
-          ),
         ],
       ),
       body: _pages[_selectedIndex],
@@ -204,6 +226,10 @@ class HomePage extends StatelessWidget {
     final firstName = (displayName != null && displayName.trim().isNotEmpty)
         ? displayName.trim().split(' ').first
         : null;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12
+        ? 'Good morning'
+        : (hour < 18 ? 'Good afternoon' : 'Good evening');
 
     // Home feature cards, grouped into two sections.
     final explore = <_Feature>[
@@ -247,7 +273,7 @@ class HomePage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  firstName == null ? 'Welcome 👋' : 'Welcome, $firstName 👋',
+                  firstName == null ? greeting : '$greeting, $firstName',
                   style: text.titleMedium?.copyWith(
                     color: colors.onPrimary.withValues(alpha: 0.95),
                   ),
@@ -268,6 +294,12 @@ class HomePage extends StatelessWidget {
               ],
             ),
           ),
+          const SizedBox(height: AppSpacing.xl),
+          const _TrailProgressCard(),
+          const SizedBox(height: AppSpacing.xxl),
+          Text('Featured today', style: text.titleMedium),
+          const SizedBox(height: AppSpacing.m),
+          const _FeaturedTodayCard(),
           const SizedBox(height: AppSpacing.xxl),
           Text('Explore Mandaluyong', style: text.titleMedium),
           const SizedBox(height: AppSpacing.m),
@@ -426,6 +458,221 @@ class PlaceholderPage extends StatelessWidget {
           const SizedBox(height: AppSpacing.s),
           Text('Coming soon', style: TextStyle(color: colors.outline)),
         ],
+      ),
+    );
+  }
+}
+
+/// Motivational trail-progress card on the home screen. Shows how far the user
+/// is on the Heritage Church Trail and nudges them to keep going.
+class _TrailProgressCard extends StatefulWidget {
+  const _TrailProgressCard();
+
+  @override
+  State<_TrailProgressCard> createState() => _TrailProgressCardState();
+}
+
+class _TrailProgressCardState extends State<_TrailProgressCard> {
+  Future<void> _openTrail() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const HeritageTrailPage()),
+    );
+    if (mounted) setState(() {}); // refresh progress after returning
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final success = AppTheme.successFor(Theme.of(context).brightness);
+
+    final visited = TrailProgress.visited.length;
+    final total = kChurches.length;
+    final complete = TrailProgress.isComplete;
+    final remaining = total - visited;
+    final progress = total == 0 ? 0.0 : visited / total;
+
+    final String title;
+    final String subtitle;
+    final String button;
+    final IconData icon;
+    if (complete) {
+      title = 'Trail complete! 🎉';
+      subtitle = 'You\'ve visited all $total churches. Claim your certificate!';
+      button = 'View your certificate';
+      icon = Icons.emoji_events;
+    } else if (visited > 0) {
+      title = 'Keep going!';
+      subtitle =
+          'You\'ve visited $visited of $total churches — $remaining more to '
+          'earn your certificate. 🏆';
+      button = 'Continue the trail';
+      icon = Icons.church_outlined;
+    } else {
+      title = 'Start the Heritage Trail';
+      subtitle = 'Visit Mandaluyong\'s historic churches, verify each stop, '
+          'and earn a certificate of completion.';
+      button = 'Start the trail';
+      icon = Icons.church_outlined;
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.l),
+      decoration: BoxDecoration(
+        color: colors.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: colors.tertiary.withValues(alpha: 0.55)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(AppSpacing.m),
+                decoration: BoxDecoration(
+                  color: colors.tertiaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: colors.onTertiaryContainer),
+              ),
+              const SizedBox(width: AppSpacing.l),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        style: text.titleMedium
+                            ?.copyWith(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(subtitle,
+                        style:
+                            text.bodySmall?.copyWith(color: colors.outline)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.m),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(AppRadius.sm),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 10,
+              backgroundColor: colors.surfaceContainerHighest,
+              color: complete ? success : colors.primary,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text('$visited of $total churches visited',
+              style: text.bodySmall?.copyWith(color: colors.outline)),
+          const SizedBox(height: AppSpacing.m),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _openTrail,
+              icon: Icon(complete ? Icons.workspace_premium : Icons.map_outlined),
+              label: Text(button),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A daily-changing "church of the day" spotlight to keep the home fresh.
+class _FeaturedTodayCard extends StatelessWidget {
+  const _FeaturedTodayCard();
+
+  Widget _fallback(ColorScheme colors) => Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [colors.primary, colors.primaryContainer],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child:
+            const Center(child: Icon(Icons.church, color: Colors.white, size: 56)),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    // Pick a church based on the day of the year (stable within a day).
+    final now = DateTime.now();
+    final dayOfYear = now.difference(DateTime(now.year, 1, 1)).inDays;
+    final church = kChurches[dayOfYear % kChurches.length];
+
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => ChurchDetailPage(church: church)),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        child: SizedBox(
+          height: 170,
+          width: double.infinity,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              if (church.image != null)
+                Image.asset(
+                  church.image!,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, _, _) => _fallback(colors),
+                )
+              else
+                _fallback(colors),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Colors.transparent, Colors.black87],
+                  ),
+                ),
+              ),
+              Positioned(
+                left: AppSpacing.l,
+                right: AppSpacing.l,
+                bottom: AppSpacing.l,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: AppSpacing.m, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: colors.tertiaryContainer,
+                        borderRadius: BorderRadius.circular(AppRadius.pill),
+                      ),
+                      child: Text('Featured today',
+                          style: text.labelMedium
+                              ?.copyWith(color: colors.onTertiaryContainer)),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(church.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.titleMedium?.copyWith(
+                            color: Colors.white, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(church.era,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.bodySmall?.copyWith(
+                            color: Colors.white.withValues(alpha: 0.9))),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -101,6 +101,8 @@ const List<CityItem> kAttractions = [
     meta: 'ADB Ave., Ortigas Center',
     icon: Icons.account_balance_outlined,
     image: 'assets/images/attractions/adb.jpg',
+    lat: 14.5881,
+    lng: 121.0582,
     body: 'The headquarters of the Asian Development Bank, a major '
         'international institution based in Mandaluyong.',
   ),
@@ -110,6 +112,8 @@ const List<CityItem> kAttractions = [
     meta: 'Brgy. Wack-Wack',
     icon: Icons.sports_golf,
     image: 'assets/images/attractions/wackwack_golf.jpg',
+    lat: 14.5931,
+    lng: 121.0496,
     body: 'One of the oldest and most prestigious golf and country clubs in '
         'the Philippines.',
   ),
@@ -119,6 +123,8 @@ const List<CityItem> kAttractions = [
     meta: 'Brgy. Wack-Wack',
     icon: Icons.business_outlined,
     image: 'assets/images/attractions/san_miguel_hq.jpg',
+    lat: 14.5817,
+    lng: 121.0582,
     body: 'The head office of San Miguel Corporation, one of the largest '
         'conglomerates in the Philippines.',
   ),
@@ -156,6 +162,8 @@ const List<CityItem> kAttractions = [
     meta: 'Ortigas Avenue',
     icon: Icons.school_outlined,
     image: 'assets/images/attractions/lasalle_greenhills.jpg',
+    lat: 14.5969,
+    lng: 121.0551,
     body: 'A prominent Catholic school run by the De La Salle Brothers.',
   ),
   CityItem(
@@ -216,6 +224,8 @@ const List<CityItem> kAttractions = [
     meta: 'EDSA, Brgy. Wack-Wack',
     icon: Icons.shopping_bag_outlined,
     image: 'assets/images/attractions/sm_megamall.jpg',
+    lat: 14.5852,
+    lng: 121.0566,
     body: 'One of the largest shopping malls in the Philippines, located '
         'along EDSA in Mandaluyong.',
   ),
@@ -225,6 +235,8 @@ const List<CityItem> kAttractions = [
     meta: 'EDSA cor. Shaw Blvd.',
     icon: Icons.shopping_bag_outlined,
     image: 'assets/images/attractions/shangrila_plaza.jpg',
+    lat: 14.5820,
+    lng: 121.0554,
     body: 'An upscale shopping mall at the corner of EDSA and Shaw Boulevard, '
         'near MRT-3 Shaw Boulevard.',
   ),
@@ -234,6 +246,8 @@ const List<CityItem> kAttractions = [
     meta: 'ADB Avenue, Ortigas',
     icon: Icons.shopping_bag_outlined,
     image: 'assets/images/attractions/the_podium.jpg',
+    lat: 14.5851,
+    lng: 121.0591,
     body: 'A premium shopping mall along ADB Avenue in the Ortigas area.',
   ),
   CityItem(

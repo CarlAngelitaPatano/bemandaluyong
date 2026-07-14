@@ -1,8 +1,17 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'main.dart'; // for HomeShell (the screen shown after login)
 import 'theme.dart'; // light theme for the auth screens
+import 'phone_signin.dart'; // phone number / SMS sign-in
+import 'heritage.dart'; // TrailProgress (demo unlock)
+
+/// Logging in with this email unlocks the whole app for demos (auto-completes
+/// the Heritage Trail and skips email verification). Change it if you like.
+const String kDemoEmail = 'demo@bemandaluyong.com';
 
 // ---------------------------------------------------------------------------
 // NOTE: These screens are UI-only for now. "Logging in" just checks that the
@@ -70,6 +79,9 @@ class _GoogleButtonState extends State<GoogleButton> {
       // Uses Firebase Auth's built-in federated flow (opens a secure browser
       // tab). No extra package needed.
       await FirebaseAuth.instance.signInWithProvider(GoogleAuthProvider());
+      // Google sign-ins are remembered by default.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('remember_me', true);
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -183,18 +195,95 @@ class _AuthBackground extends StatelessWidget {
 // ===========================================================================
 // 1) WELCOME  — the first screen the app shows
 // ===========================================================================
-class RoleSelectPage extends StatelessWidget {
+class RoleSelectPage extends StatefulWidget {
   const RoleSelectPage({super.key});
 
   @override
+  State<RoleSelectPage> createState() => _RoleSelectPageState();
+}
+
+class _RoleSelectPageState extends State<RoleSelectPage>
+    with TickerProviderStateMixin {
+  static const _blue = Color(0xFF0038A8);
+  static const _deepBlue = Color(0xFF0B2E73);
+
+  late final AnimationController _intro; // staged reveal
+  late final AnimationController _spin; // rotating loader ring
+
+  @override
+  void initState() {
+    super.initState();
+    _spin = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    )..repeat();
+    _intro = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2800),
+    )..forward();
+    // Stop the ring once the intro finishes (it's faded out by then).
+    _intro.addStatusListener((s) {
+      if (s == AnimationStatus.completed) _spin.stop();
+    });
+  }
+
+  @override
+  void dispose() {
+    _intro.dispose();
+    _spin.dispose();
+    super.dispose();
+  }
+
+  // A curved sub-animation over an interval of the intro timeline.
+  Animation<double> _step(double a, double b, [Curve c = Curves.easeOut]) =>
+      CurvedAnimation(parent: _intro, curve: Interval(a, b, curve: c));
+
+  // Fade + slide-up reveal.
+  Widget _reveal(Animation<double> t, Widget child) => FadeTransition(
+        opacity: t,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0, 0.18),
+            end: Offset.zero,
+          ).animate(t),
+          child: child,
+        ),
+      );
+
+  Widget _logoCircle(String asset, IconData fallback) => Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: _blue.withValues(alpha: 0.15),
+              blurRadius: 20,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Image.asset(
+          asset,
+          height: 78,
+          width: 78,
+          fit: BoxFit.contain,
+          errorBuilder: (_, _, _) => Icon(fallback, size: 60, color: _blue),
+        ),
+      );
+
+  @override
   Widget build(BuildContext context) {
-    const blue = Color(0xFF0038A8); // Mandaluyong blue
-    const deepBlue = Color(0xFF0B2E73); // dark navy — high contrast for text
+    final ringFade = Tween<double>(begin: 1, end: 0)
+        .animate(_step(0.42, 0.60, Curves.easeIn));
+    final logoOpacity = _step(0.46, 0.72);
+    final logoScale =
+        Tween<double>(begin: 0.85, end: 1).animate(_step(0.46, 0.74, Curves.easeOutBack));
+
     return Scaffold(
       body: Container(
         width: double.infinity,
         decoration: const BoxDecoration(
-          // Soft, light Mandaluyong-blue ambiance.
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
@@ -208,82 +297,112 @@ class RoleSelectPage extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // Seal in a clean white circle
-                Center(
-                  child: Container(
-                    padding: const EdgeInsets.all(18),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: blue.withValues(alpha: 0.15),
-                          blurRadius: 24,
-                          offset: const Offset(0, 8),
+                // Logo area: spinner ring fades out as the two logos fade in.
+                SizedBox(
+                  height: 150,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      FadeTransition(
+                        opacity: ringFade,
+                        child: RotationTransition(
+                          turns: _spin,
+                          child: const _ColorRing(size: 84),
                         ),
-                      ],
-                    ),
-                    child: Image.asset(
-                      'assets/icon/new_logo.png',
-                      height: 120,
-                      width: 120,
-                      fit: BoxFit.contain,
-                      errorBuilder: (_, _, _) => const Icon(
-                        Icons.location_city,
-                        size: 90,
-                        color: blue,
                       ),
-                    ),
+                      FadeTransition(
+                        opacity: logoOpacity,
+                        child: ScaleTransition(
+                          scale: logoScale,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              _logoCircle('assets/icon/new_logo.png',
+                                  Icons.location_city),
+                              const SizedBox(width: 18),
+                              _logoCircle('assets/icon/jru_logo.png',
+                                  Icons.school),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 28),
-                Text(
-                  'Be@Mandaluyong',
-                  textAlign: TextAlign.center,
-                  style: AppTheme.brandTextStyle(fontSize: 34, color: deepBlue),
+                const SizedBox(height: 22),
+                _reveal(
+                  _step(0.66, 0.80),
+                  Text(
+                    'Be@Mandaluyong',
+                    textAlign: TextAlign.center,
+                    style:
+                        AppTheme.brandTextStyle(fontSize: 34, color: _deepBlue),
+                  ),
                 ),
                 const SizedBox(height: 10),
-                const Text(
-                  'Discover the heritage and culture of Mandaluyong',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF243043),
-                    height: 1.4,
+                _reveal(
+                  _step(0.72, 0.86),
+                  const Text(
+                    'Discover the heritage and culture of Mandaluyong',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF243043),
+                      height: 1.4,
+                    ),
                   ),
                 ),
-                const SizedBox(height: 44),
-                FilledButton.icon(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LoginPage()),
+                const SizedBox(height: 8),
+                _reveal(
+                  _step(0.76, 0.90),
+                  const Text(
+                    'A Jose Rizal University student project',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF5B6472),
+                    ),
                   ),
-                  icon: const Icon(Icons.login),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: blue,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    textStyle: const TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 40),
+                _reveal(
+                  _step(0.82, 0.96),
+                  FilledButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const LoginPage()),
+                    ),
+                    icon: const Icon(Icons.login),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: _blue,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(56),
+                      textStyle: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.bold),
+                    ),
+                    label: const Text('Log in'),
                   ),
-                  label: const Text('Log in'),
                 ),
                 const SizedBox(height: 14),
-                OutlinedButton.icon(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const RegisterPage()),
+                _reveal(
+                  _step(0.86, 1.0),
+                  OutlinedButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const RegisterPage()),
+                    ),
+                    icon: const Icon(Icons.person_add_outlined),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: _blue,
+                      side: const BorderSide(color: _blue, width: 1.5),
+                      minimumSize: const Size.fromHeight(56),
+                      textStyle: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.bold),
+                    ),
+                    label: const Text('Create account'),
                   ),
-                  icon: const Icon(Icons.person_add_outlined),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: blue,
-                    side: const BorderSide(color: blue, width: 1.5),
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    textStyle: const TextStyle(
-                        fontSize: 17, fontWeight: FontWeight.bold),
-                  ),
-                  label: const Text('Create account'),
                 ),
               ],
             ),
@@ -292,6 +411,48 @@ class RoleSelectPage extends StatelessWidget {
       ),
     );
   }
+}
+
+/// A 4-arc colored loader ring (echoes the eGovPH-style spinner), painted in
+/// the Mandaluyong palette.
+class _ColorRing extends StatelessWidget {
+  const _ColorRing({required this.size});
+  final double size;
+
+  @override
+  Widget build(BuildContext context) =>
+      CustomPaint(size: Size.square(size), painter: _RingPainter());
+}
+
+class _RingPainter extends CustomPainter {
+  static const _colors = [
+    Color(0xFF0038A8), // blue
+    Color(0xFFFCD116), // yellow
+    Color(0xFF0038A8), // blue
+    Color(0xFFFCD116), // yellow
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const stroke = 7.0;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = size.width / 2 - stroke / 2;
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    const gap = 0.28; // radians between arcs
+    const sweep = (2 * math.pi) / 4 - gap;
+    for (int i = 0; i < 4; i++) {
+      final start = i * (2 * math.pi / 4) + gap / 2;
+      final paint = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = stroke
+        ..strokeCap = StrokeCap.round
+        ..color = _colors[i];
+      canvas.drawArc(rect, start, sweep, false, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 // ===========================================================================
@@ -310,6 +471,19 @@ class _LoginPageState extends State<LoginPage> {
   final _password = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
+  bool _remember = true;
+
+  @override
+  void initState() {
+    super.initState();
+    // Prefill the email if it was remembered last time.
+    SharedPreferences.getInstance().then((prefs) {
+      final saved = prefs.getString('saved_email');
+      if (saved != null && saved.isNotEmpty && mounted) {
+        setState(() => _email.text = saved);
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -322,10 +496,73 @@ class _LoginPageState extends State<LoginPage> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _loading = true);
     try {
-      await FirebaseAuth.instance.signInWithEmailAndPassword(
+      final cred = await FirebaseAuth.instance.signInWithEmailAndPassword(
         email: _email.text.trim(),
         password: _password.text,
       );
+      await cred.user?.reload();
+      final user = FirebaseAuth.instance.currentUser;
+      final isDemo = user?.email?.toLowerCase() == kDemoEmail;
+
+      // Block sign-in until the email is verified (the demo account is exempt).
+      if (user != null && !user.emailVerified && !isDemo) {
+        if (!mounted) return;
+        final messenger = ScaffoldMessenger.of(context);
+        await showDialog(
+          context: context,
+          builder: (dialogCtx) => AlertDialog(
+            icon: Icon(Icons.mark_email_unread_outlined,
+                color: Theme.of(dialogCtx).colorScheme.primary, size: 48),
+            title: const Text('Verify your email first'),
+            content: Text(
+              'Your email (${_email.text.trim()}) isn\'t verified yet. Open the '
+              'verification link we emailed you — check your Spam and All Mail '
+              'folders, and search for "firebaseapp". Then log in again.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await user.sendEmailVerification();
+                    messenger.showSnackBar(const SnackBar(
+                        content: Text('Verification email sent.')));
+                  } catch (_) {
+                    messenger.showSnackBar(const SnackBar(
+                        content:
+                            Text('Please wait a minute before resending.')));
+                  }
+                },
+                child: const Text('Resend link'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogCtx),
+                child: const Text('OK'),
+              ),
+            ],
+          ),
+        );
+        await FirebaseAuth.instance.signOut();
+        return;
+      }
+
+      // Save the "Remember me" choice + email for next launch.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('remember_me', _remember);
+      if (_remember) {
+        await prefs.setString('saved_email', _email.text.trim());
+      } else {
+        await prefs.remove('saved_email');
+      }
+
+      if (isDemo) {
+        // Demo account: unlock the whole trail so every feature is showcased.
+        TrailProgress.unlockAll();
+      } else {
+        // Real account: restore this device's actual saved progress
+        // (clears any leftover demo unlock from the same session).
+        await TrailProgress.load();
+      }
+
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -389,16 +626,31 @@ class _LoginPageState extends State<LoginPage> {
               validator: validatePassword,
             ),
 
-            // Forgot password link (aligned right)
-            Align(
-              alignment: Alignment.centerRight,
-              child: TextButton(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+            // Remember me + forgot password
+            Row(
+              children: [
+                SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: Checkbox(
+                    value: _remember,
+                    onChanged: (v) => setState(() => _remember = v ?? true),
+                  ),
                 ),
-                child: const Text('Forgot password?'),
-              ),
+                const SizedBox(width: 8),
+                GestureDetector(
+                  onTap: () => setState(() => _remember = !_remember),
+                  child: const Text('Remember me'),
+                ),
+                const Spacer(),
+                TextButton(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+                  ),
+                  child: const Text('Forgot password?'),
+                ),
+              ],
             ),
             const SizedBox(height: 8),
 
@@ -422,6 +674,18 @@ class _LoginPageState extends State<LoginPage> {
             const SizedBox(height: 20),
 
             const GoogleButton(label: 'Continue with Google'),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const PhoneSignInPage()),
+              ),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(52),
+              ),
+              icon: const Icon(Icons.sms_outlined),
+              label: const Text('Sign in with phone number'),
+            ),
 
             const SizedBox(height: 24),
             Row(
@@ -481,15 +745,23 @@ class _RegisterPageState extends State<RegisterPage> {
         password: _password.text,
       );
       await cred.user?.updateDisplayName(_name.text.trim());
+      // Send a verification link to prove the email is real & owned by them.
+      await cred.user?.sendEmailVerification();
+      // Keep them signed out until they verify.
+      await FirebaseAuth.instance.signOut();
       if (!mounted) return;
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
-          icon: Icon(Icons.check_circle,
+          icon: Icon(Icons.mark_email_read_outlined,
               color: AppTheme.successFor(Theme.of(context).brightness),
               size: 48),
-          title: const Text('Account created'),
-          content: Text('Welcome, ${_name.text}! You can now log in.'),
+          title: const Text('Verify your email'),
+          content: Text(
+            'Almost done, ${_name.text}! We sent a verification link to '
+            '${_email.text.trim()}. Open it to confirm your email '
+            '(check your spam folder too), then log in.',
+          ),
           actions: [
             FilledButton(
               onPressed: () {
