@@ -21,6 +21,8 @@ import 'trail_map.dart';
 import 'onboarding.dart';
 import 'search.dart';
 import 'dining.dart';
+import 'weather.dart';
+import 'local_notifs.dart';
 
 void main() async {
   // Required before any async work in main().
@@ -33,6 +35,9 @@ void main() async {
   await TrailProgress.load();
   // Restore the saved light/dark theme choice.
   await ThemeController.instance.load();
+  // Set up the daily 7 AM reminder notification (asks permission once).
+  await LocalNotifs.setup();
+
   // Show the intro only on first launch.
   final seenOnboarding = await Onboarding.seen();
 
@@ -272,11 +277,18 @@ class HomePage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  firstName == null ? greeting : '$greeting, $firstName',
-                  style: text.titleMedium?.copyWith(
-                    color: colors.onPrimary.withValues(alpha: 0.95),
-                  ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        firstName == null ? greeting : '$greeting, $firstName',
+                        style: text.titleMedium?.copyWith(
+                          color: colors.onPrimary.withValues(alpha: 0.95),
+                        ),
+                      ),
+                    ),
+                    const WeatherChip(),
+                  ],
                 ),
                 const SizedBox(height: 6),
                 Text(

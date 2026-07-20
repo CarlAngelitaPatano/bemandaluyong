@@ -251,7 +251,7 @@ class _RoleSelectPageState extends State<RoleSelectPage>
       );
 
   Widget _logoCircle(String asset, IconData fallback) => Container(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
           shape: BoxShape.circle,
@@ -265,10 +265,10 @@ class _RoleSelectPageState extends State<RoleSelectPage>
         ),
         child: Image.asset(
           asset,
-          height: 78,
-          width: 78,
+          height: 104,
+          width: 104,
           fit: BoxFit.contain,
-          errorBuilder: (_, _, _) => Icon(fallback, size: 60, color: _blue),
+          errorBuilder: (_, _, _) => Icon(fallback, size: 80, color: _blue),
         ),
       );
 
@@ -314,16 +314,8 @@ class _RoleSelectPageState extends State<RoleSelectPage>
                         opacity: logoOpacity,
                         child: ScaleTransition(
                           scale: logoScale,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _logoCircle('assets/icon/new_logo.png',
-                                  Icons.location_city),
-                              const SizedBox(width: 18),
-                              _logoCircle('assets/icon/jru_logo.png',
-                                  Icons.school),
-                            ],
-                          ),
+                          child: _logoCircle(
+                              'assets/icon/new_logo.png', Icons.location_city),
                         ),
                       ),
                     ],

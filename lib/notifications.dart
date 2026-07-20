@@ -5,6 +5,7 @@ import 'theme.dart';
 import 'heritage.dart'; // TrailProgress, kChurches, HeritageTrailPage
 import 'city_content.dart'; // EventsPage
 import 'news_page.dart'; // NewsPage
+import 'weather.dart'; // WeatherService (weather notification)
 
 // ===========================================================================
 // In-app notifications.
@@ -45,6 +46,25 @@ class NotificationService {
     final total = kChurches.length;
 
     final list = <AppNotification>[];
+
+    // Today's weather (if fetched) — advice adapts to the conditions.
+    final w = WeatherService.last;
+    if (w != null) {
+      final now = DateTime.now();
+      final day = '${now.year}${now.month}${now.day}';
+      final rainy = const [51, 53, 55, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99]
+          .contains(w.code);
+      list.add(AppNotification(
+        id: 'weather_$day',
+        title: 'Today in Mandaluyong: ${w.tempC.round()}°C · ${w.label}',
+        body: rainy
+            ? 'Rain expected — bring an umbrella if you\'re walking the '
+                'Heritage Trail today. ☔'
+            : 'Looks like a good day to explore the city and the Heritage '
+                'Trail! 🌤️',
+        icon: w.icon,
+      ));
+    }
 
     if (total > 0 && visited >= total) {
       list.add(const AppNotification(
@@ -139,6 +159,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   Future<void> _load() async {
+    await WeatherService.ensureLoaded(); // so the weather notif can appear
     final read = await NotificationService.readIds();
     if (!mounted) return;
     setState(() {
