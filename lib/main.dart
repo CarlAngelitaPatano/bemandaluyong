@@ -236,18 +236,35 @@ class HomePage extends StatelessWidget {
         ? 'Good morning'
         : (hour < 18 ? 'Good afternoon' : 'Good evening');
 
-    // Home feature cards, grouped into two sections.
+    // Home feature cards, grouped into two sections. Each feature has its own
+    // color identity (gradient) for a modern, professional look.
     final explore = <_Feature>[
-      _Feature('Map', Icons.map_outlined, page: (_) => const TrailMapPage()),
-      _Feature('Attractions', Icons.photo_camera_outlined, page: (_) => const AttractionsPage()),
-      _Feature('Homegrown', Icons.storefront_outlined, page: (_) => const DiningPage()),
-      _Feature('3D / AR', Icons.view_in_ar_outlined, page: (_) => const ArIntroPage()),
+      _Feature('Map', Icons.map_rounded,
+          color: const Color(0xFF1E88E5), // blue
+          page: (_) => const TrailMapPage()),
+      _Feature('Attractions', Icons.photo_camera_rounded,
+          color: const Color(0xFFF4511E), // deep orange
+          page: (_) => const AttractionsPage()),
+      _Feature('Homegrown', Icons.storefront_rounded,
+          color: const Color(0xFF8E24AA), // purple
+          page: (_) => const DiningPage()),
+      _Feature('3D / AR', Icons.view_in_ar_rounded,
+          color: const Color(0xFF00897B), // teal
+          page: (_) => const ArIntroPage()),
     ];
     final cityServices = <_Feature>[
-      _Feature('News', Icons.article_outlined, page: (_) => const NewsPage()),
-      _Feature('Events', Icons.event_outlined, page: (_) => const EventsPage()),
-      _Feature('Services', Icons.apps_outlined, page: (_) => const ServicesPage()),
-      _Feature('Contact', Icons.call_outlined, page: (_) => const ReportConcernPage()),
+      _Feature('News', Icons.newspaper_rounded,
+          color: const Color(0xFF3949AB), // indigo
+          page: (_) => const NewsPage()),
+      _Feature('Events', Icons.event_rounded,
+          color: const Color(0xFFE53935), // red
+          page: (_) => const EventsPage()),
+      _Feature('Services', Icons.widgets_rounded,
+          color: const Color(0xFF43A047), // green
+          page: (_) => const ServicesPage()),
+      _Feature('Contact', Icons.support_agent_rounded,
+          color: const Color(0xFFFB8C00), // amber-orange
+          page: (_) => const ReportConcernPage()),
     ];
 
     return SingleChildScrollView(
@@ -389,8 +406,10 @@ class HomePage extends StatelessWidget {
 class _Feature {
   final String label;
   final IconData icon;
+  final Color color; // the feature's color identity
   final WidgetBuilder? page; // optional screen to open when tapped
-  const _Feature(this.label, this.icon, {this.page});
+  const _Feature(this.label, this.icon,
+      {this.color = const Color(0xFF0038A8), this.page});
 }
 
 class _FeatureCard extends StatelessWidget {
@@ -426,14 +445,29 @@ class _FeatureCard extends StatelessWidget {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
+              // Squircle with a soft gradient + glow in the feature's color.
               Container(
-                padding: const EdgeInsets.all(AppSpacing.m),
+                width: 56,
+                height: 56,
                 decoration: BoxDecoration(
-                  color: colors.primaryContainer,
-                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      feature.color.withValues(alpha: 0.85),
+                      feature.color,
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(18),
+                  boxShadow: [
+                    BoxShadow(
+                      color: feature.color.withValues(alpha: 0.4),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
                 ),
-                child: Icon(feature.icon,
-                    size: 28, color: colors.onPrimaryContainer),
+                child: Icon(feature.icon, size: 28, color: Colors.white),
               ),
               const SizedBox(height: AppSpacing.m),
               Text(
