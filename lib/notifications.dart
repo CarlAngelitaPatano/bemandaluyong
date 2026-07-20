@@ -6,6 +6,7 @@ import 'heritage.dart'; // TrailProgress, kChurches, HeritageTrailPage
 import 'city_content.dart'; // EventsPage
 import 'news_page.dart'; // NewsPage
 import 'weather.dart'; // WeatherService (weather notification)
+import 'motion.dart'; // Reveal animation
 
 // ===========================================================================
 // In-app notifications.
@@ -218,10 +219,14 @@ class _NotificationsPageState extends State<NotificationsPage> {
               itemBuilder: (context, i) {
                 final n = _items[i];
                 final isUnread = !_read.contains(n.id);
-                return _NotificationCard(
-                  notification: n,
-                  unread: isUnread,
-                  onTap: () => _open(n),
+                // Cards cascade in one after another.
+                return Reveal(
+                  delayMs: 50 + i * 70,
+                  child: _NotificationCard(
+                    notification: n,
+                    unread: isUnread,
+                    onTap: () => _open(n),
+                  ),
                 );
               },
             ),

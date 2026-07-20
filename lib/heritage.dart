@@ -15,6 +15,7 @@ import 'email_service.dart';
 import 'city_content.dart'; // for the shared LeadingThumb widget
 import 'theme.dart'; // design tokens (AppTheme.success, AppSpacing, AppRadius)
 import 'achievements.dart'; // trail badges + unlock celebration
+import 'motion.dart'; // Reveal / PopIn animations
 
 /// A heritage church in Mandaluyong.
 class Church {
@@ -718,13 +719,18 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
           ),
           const SizedBox(height: 20),
 
-          // Progress bar
+          // Progress bar (fills up smoothly on open)
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: total == 0 ? 0 : visitedCount / total,
-              minHeight: 10,
-              backgroundColor: colors.surfaceContainerHighest,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: total == 0 ? 0 : visitedCount / total),
+              duration: const Duration(milliseconds: 900),
+              curve: Curves.easeOutCubic,
+              builder: (context, v, _) => LinearProgressIndicator(
+                value: v,
+                minHeight: 10,
+                backgroundColor: colors.surfaceContainerHighest,
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -736,18 +742,24 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
 
           // Achievement banner (only when all stops are visited)
           if (complete) ...[
-            _CompletionBanner(onClaim: _claimCertificate),
+            PopIn(
+              delayMs: 150,
+              child: _CompletionBanner(onClaim: _claimCertificate),
+            ),
             const SizedBox(height: 20),
           ],
 
-          // Numbered timeline of stops
+          // Numbered timeline of stops — cascade in one after another
           for (int i = 0; i < kChurches.length; i++)
-            _TrailStop(
-              index: i + 1,
-              church: kChurches[i],
-              isLast: i == kChurches.length - 1,
-              verified: TrailProgress.isVisited(kChurches[i]),
-              onVerify: () => _verify(kChurches[i]),
+            Reveal(
+              delayMs: 120 + i * 70,
+              child: _TrailStop(
+                index: i + 1,
+                church: kChurches[i],
+                isLast: i == kChurches.length - 1,
+                verified: TrailProgress.isVisited(kChurches[i]),
+                onVerify: () => _verify(kChurches[i]),
+              ),
             ),
         ],
       ),

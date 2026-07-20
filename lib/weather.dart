@@ -101,7 +101,15 @@ class _WeatherChipState extends State<WeatherChip> {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
 
-    return Container(
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0, end: 1),
+      duration: const Duration(milliseconds: 500),
+      curve: Curves.easeOut,
+      builder: (context, t, child) => Opacity(
+        opacity: t,
+        child: Transform.scale(scale: 0.9 + 0.1 * t, child: child),
+      ),
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: Colors.white.withValues(alpha: 0.22),
@@ -120,6 +128,7 @@ class _WeatherChipState extends State<WeatherChip> {
             ),
           ),
         ],
+      ),
       ),
     );
   }

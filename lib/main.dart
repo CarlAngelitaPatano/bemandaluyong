@@ -324,35 +324,47 @@ class HomePage extends StatelessWidget {
             ),
           ),
           const SizedBox(height: AppSpacing.xl),
-          const _TrailProgressCard(),
+          const _Reveal(delayMs: 60, child: _TrailProgressCard()),
           const SizedBox(height: AppSpacing.xxl),
-          Text('Featured today', style: text.titleMedium),
+          _Reveal(
+              delayMs: 160,
+              child: Text('Featured today', style: text.titleMedium)),
           const SizedBox(height: AppSpacing.m),
-          const _FeaturedTodayCard(),
+          const _Reveal(delayMs: 200, child: _FeaturedTodayCard()),
           const SizedBox(height: AppSpacing.xxl),
-          Text('Explore Mandaluyong', style: text.titleMedium),
+          _Reveal(
+              delayMs: 280,
+              child: Text('Explore Mandaluyong', style: text.titleMedium)),
           const SizedBox(height: AppSpacing.m),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: AppSpacing.m,
-            crossAxisSpacing: AppSpacing.m,
-            childAspectRatio: 1.3,
-            children: explore.map((f) => _FeatureCard(feature: f)).toList(),
+          _Reveal(
+            delayMs: 320,
+            child: GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: AppSpacing.m,
+              crossAxisSpacing: AppSpacing.m,
+              childAspectRatio: 1.3,
+              children: explore.map((f) => _FeatureCard(feature: f)).toList(),
+            ),
           ),
           const SizedBox(height: AppSpacing.xxl),
-          Text('City & services', style: text.titleMedium),
+          _Reveal(
+              delayMs: 400,
+              child: Text('City & services', style: text.titleMedium)),
           const SizedBox(height: AppSpacing.m),
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            mainAxisSpacing: AppSpacing.m,
-            crossAxisSpacing: AppSpacing.m,
-            childAspectRatio: 1.3,
-            children:
-                cityServices.map((f) => _FeatureCard(feature: f)).toList(),
+          _Reveal(
+            delayMs: 440,
+            child: GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: AppSpacing.m,
+              crossAxisSpacing: AppSpacing.m,
+              childAspectRatio: 1.3,
+              children:
+                  cityServices.map((f) => _FeatureCard(feature: f)).toList(),
+            ),
           ),
 
           // ---- Heritage Churches section ----
@@ -412,20 +424,33 @@ class _Feature {
       {this.color = const Color(0xFF0038A8), this.page});
 }
 
-class _FeatureCard extends StatelessWidget {
+class _FeatureCard extends StatefulWidget {
   const _FeatureCard({required this.feature});
   final _Feature feature;
 
   @override
+  State<_FeatureCard> createState() => _FeatureCardState();
+}
+
+class _FeatureCardState extends State<_FeatureCard> {
+  bool _pressed = false;
+
+  @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Card(
+    final feature = widget.feature;
+    return AnimatedScale(
+      scale: _pressed ? 0.94 : 1,
+      duration: const Duration(milliseconds: 120),
+      curve: Curves.easeOut,
+      child: Card(
       elevation: 0,
       color: colors.surfaceContainerHighest,
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.md)),
       child: InkWell(
         borderRadius: BorderRadius.circular(AppRadius.md),
+        onHighlightChanged: (v) => setState(() => _pressed = v),
         onTap: () {
           if (feature.page != null) {
             // Open the card's own screen (with an automatic back button).
@@ -480,6 +505,7 @@ class _FeatureCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
       ),
     );
   }
@@ -603,11 +629,17 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
           const SizedBox(height: AppSpacing.m),
           ClipRRect(
             borderRadius: BorderRadius.circular(AppRadius.sm),
-            child: LinearProgressIndicator(
-              value: progress,
-              minHeight: 10,
-              backgroundColor: colors.surfaceContainerHighest,
-              color: complete ? success : colors.primary,
+            // Fills up smoothly whenever the card appears.
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0, end: progress),
+              duration: const Duration(milliseconds: 900),
+              curve: Curves.easeOutCubic,
+              builder: (context, v, _) => LinearProgressIndicator(
+                value: v,
+                minHeight: 10,
+                backgroundColor: colors.surfaceContainerHighest,
+                color: complete ? success : colors.primary,
+              ),
             ),
           ),
           const SizedBox(height: 6),
@@ -623,6 +655,44 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Fades + slides its child in after [delayMs] — used to cascade the home
+/// sections so the dashboard feels alive when it opens.
+class _Reveal extends StatefulWidget {
+  const _Reveal({required this.delayMs, required this.child});
+  final int delayMs;
+  final Widget child;
+
+  @override
+  State<_Reveal> createState() => _RevealState();
+}
+
+class _RevealState extends State<_Reveal> {
+  bool _shown = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Future.delayed(Duration(milliseconds: widget.delayMs), () {
+      if (mounted) setState(() => _shown = true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: _shown ? 1 : 0,
+      duration: const Duration(milliseconds: 450),
+      curve: Curves.easeOut,
+      child: AnimatedSlide(
+        offset: _shown ? Offset.zero : const Offset(0, 0.07),
+        duration: const Duration(milliseconds: 450),
+        curve: Curves.easeOutCubic,
+        child: widget.child,
       ),
     );
   }
@@ -666,14 +736,21 @@ class _FeaturedTodayCard extends StatelessWidget {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (church.image != null)
-                Image.asset(
-                  church.image!,
-                  fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => _fallback(colors),
-                )
-              else
-                _fallback(colors),
+              // Cinematic slow zoom-out on load (Ken Burns effect).
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 1.12, end: 1.0),
+                duration: const Duration(milliseconds: 1500),
+                curve: Curves.easeOutCubic,
+                builder: (context, s, child) =>
+                    Transform.scale(scale: s, child: child),
+                child: church.image != null
+                    ? Image.asset(
+                        church.image!,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, _, _) => _fallback(colors),
+                      )
+                    : _fallback(colors),
+              ),
               const DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(

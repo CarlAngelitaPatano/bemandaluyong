@@ -12,6 +12,7 @@ import 'heritage.dart'; // TrailProgress, kChurches, HeritageTrailPage
 import 'theme.dart'; // AppTheme.cityRed
 import 'theme_controller.dart'; // light/dark/system setting
 import 'achievements.dart'; // TrailBadge, kBadges
+import 'motion.dart'; // Reveal / PopIn animations
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
 /// keyed per account). Shared so other screens (e.g. the home app bar) can
@@ -255,7 +256,9 @@ class _ProfilePageState extends State<ProfilePage> {
             children: [
               GestureDetector(
                 onTap: _changeAvatar,
-                child: Stack(
+                child: PopIn(
+                  delayMs: 60,
+                  child: Stack(
                   children: [
                     CircleAvatar(
                       radius: 48,
@@ -294,6 +297,7 @@ class _ProfilePageState extends State<ProfilePage> {
                     ),
                   ],
                 ),
+                ),
               ),
               const SizedBox(height: AppSpacing.m),
               Text(name, style: text.titleLarge),
@@ -305,7 +309,9 @@ class _ProfilePageState extends State<ProfilePage> {
         const SizedBox(height: AppSpacing.xxl),
 
         // ----- Trail progress -----
-        Card(
+        Reveal(
+          delayMs: 120,
+          child: Card(
           child: Padding(
             padding: const EdgeInsets.all(AppSpacing.l),
             child: Column(
@@ -321,11 +327,17 @@ class _ProfilePageState extends State<ProfilePage> {
                 const SizedBox(height: AppSpacing.m),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(AppRadius.sm),
-                  child: LinearProgressIndicator(
-                    value: total == 0 ? 0 : visited / total,
-                    minHeight: 10,
-                    backgroundColor: colors.surfaceContainerHighest,
-                    color: completed ? success : colors.primary,
+                  child: TweenAnimationBuilder<double>(
+                    tween:
+                        Tween(begin: 0, end: total == 0 ? 0 : visited / total),
+                    duration: const Duration(milliseconds: 900),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, v, _) => LinearProgressIndicator(
+                      value: v,
+                      minHeight: 10,
+                      backgroundColor: colors.surfaceContainerHighest,
+                      color: completed ? success : colors.primary,
+                    ),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.s),
@@ -353,6 +365,7 @@ class _ProfilePageState extends State<ProfilePage> {
               ],
             ),
           ),
+          ),
         ),
         const SizedBox(height: AppSpacing.xl),
 
@@ -371,9 +384,13 @@ class _ProfilePageState extends State<ProfilePage> {
             scrollDirection: Axis.horizontal,
             itemCount: kBadges.length,
             separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.l),
-            itemBuilder: (context, i) => _BadgeTile(
-              badge: kBadges[i],
-              earned: visited >= kBadges[i].threshold,
+            // Badges pop in one after another with a springy bounce.
+            itemBuilder: (context, i) => PopIn(
+              delayMs: 250 + i * 90,
+              child: _BadgeTile(
+                badge: kBadges[i],
+                earned: visited >= kBadges[i].threshold,
+              ),
             ),
           ),
         ),
@@ -382,7 +399,9 @@ class _ProfilePageState extends State<ProfilePage> {
         // ----- Account -----
         Text('Account', style: text.titleMedium),
         const SizedBox(height: AppSpacing.s),
-        Card(
+        Reveal(
+          delayMs: 320,
+          child: Card(
           child: Column(
             children: [
               ListTile(
@@ -404,13 +423,16 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ],
           ),
+          ),
         ),
         const SizedBox(height: AppSpacing.xl),
 
         // ----- Settings -----
         Text('Settings', style: text.titleMedium),
         const SizedBox(height: AppSpacing.s),
-        Card(
+        Reveal(
+          delayMs: 400,
+          child: Card(
           child: Column(
             children: [
               ListTile(
@@ -442,15 +464,19 @@ class _ProfilePageState extends State<ProfilePage> {
               ),
             ],
           ),
+          ),
         ),
         const SizedBox(height: AppSpacing.xl),
 
         // ----- Log out -----
-        OutlinedButton.icon(
-          onPressed: _logout,
-          style: OutlinedButton.styleFrom(foregroundColor: AppTheme.cityRed),
-          icon: const Icon(Icons.logout),
-          label: const Text('Log out'),
+        Reveal(
+          delayMs: 480,
+          child: OutlinedButton.icon(
+            onPressed: _logout,
+            style: OutlinedButton.styleFrom(foregroundColor: AppTheme.cityRed),
+            icon: const Icon(Icons.logout),
+            label: const Text('Log out'),
+          ),
         ),
         const SizedBox(height: AppSpacing.xxl),
         Center(
