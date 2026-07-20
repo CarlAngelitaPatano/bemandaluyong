@@ -351,22 +351,29 @@ class HeritageChurchesView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        Text(
-          'Heritage Churches',
-          style: Theme.of(context).textTheme.headlineSmall
-              ?.copyWith(fontWeight: FontWeight.bold),
+        Reveal(
+          delayMs: 0,
+          child: Text(
+            'Heritage Churches',
+            style: Theme.of(context).textTheme.headlineSmall
+                ?.copyWith(fontWeight: FontWeight.bold),
+          ),
         ),
         const SizedBox(height: 4),
-        const Text('Historic churches of Mandaluyong'),
+        const Reveal(
+            delayMs: 40, child: Text('Historic churches of Mandaluyong')),
         const SizedBox(height: 16),
 
-        // Trail call-to-action
-        _TrailBanner(),
+        // Trail call-to-action — springs in to draw the eye
+        PopIn(delayMs: 120, child: _TrailBanner()),
         const SizedBox(height: 16),
 
-        // All churches
-        for (final church in kChurches) ...[
-          ChurchCard(church: church),
+        // All churches cascade in one after another
+        for (int i = 0; i < kChurches.length; i++) ...[
+          Reveal(
+            delayMs: 220 + i * 60,
+            child: ChurchCard(church: kChurches[i]),
+          ),
           const SizedBox(height: 12),
         ],
       ],
