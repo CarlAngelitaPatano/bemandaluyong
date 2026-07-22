@@ -1,17 +1,41 @@
-# be_mandaluyong
+# Be@Mandaluyong
 
-A new Flutter project.
+A Flutter civic/tourism app for Mandaluyong City, Philippines.
 
-## Getting Started
+## Features
 
-This project is a starting point for a Flutter application.
+- **Heritage Church Trail** — visit and verify heritage churches around the city to earn a completion certificate (emailed via EmailJS), with unlockable achievement badges along the way.
+- **Heritage in 3D / AR** — a 3D/AR model viewer preview for select heritage sites.
+- **Local news** — live headlines pulled from Google News RSS.
+- **City services & events** — directory of city government services and upcoming events.
+- **Attractions** — points of interest around Mandaluyong.
+- **Homegrown** — a directory of local businesses and eateries.
+- **Weather** — live conditions via Open-Meteo.
+- **Profile & auth** — email/password, Google Sign-In, and phone sign-in via Firebase Authentication.
+- **Notifications** — an in-app notification center plus a daily 7:00 AM local reminder.
 
-A few resources to get you started if this is your first Flutter project:
+## Getting started
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```
+flutter pub get
+flutter run
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Android is the primary target (launcher icon and splash screen are configured for Android only; iOS/web are disabled in `pubspec.yaml`).
+
+### Useful commands
+
+```
+flutter analyze                     # static analysis
+flutter test                        # run all tests
+flutter build apk                   # release Android APK
+flutter build appbundle             # release Android App Bundle (Play Store)
+```
+
+## Tech notes
+
+- No custom backend — content is either hardcoded in the relevant feature file or fetched live from free, keyless public APIs (Open-Meteo, Google News RSS, OpenStreetMap tiles).
+- Firebase is used only for Authentication.
+- Local state (theme, trail progress, notifications, onboarding) is persisted with `shared_preferences`.
+
+See `CLAUDE.md` for detailed architecture notes.
