@@ -23,6 +23,8 @@ dart run flutter_launcher_icons         # regenerate launcher icons after changi
 
 There is no lint-fix / format script beyond standard `dart format .`. There is no CI workflow in `.github/` for this app (the only `.github/` content is an unrelated `modernize/java-upgrade` scaffold).
 
+Note: `android_backup/` at the repo root is a stray copy of an older `android/` project (Gradle files, launcher icons, etc.) — it is not part of the build. The live Android project is `android/`.
+
 ## Architecture
 
 ### Flat, single-package structure
