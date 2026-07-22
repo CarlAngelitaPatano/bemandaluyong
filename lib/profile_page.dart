@@ -153,13 +153,20 @@ class _ProfilePageState extends State<ProfilePage> {
       builder: (context) => SimpleDialog(
         title: const Text('Appearance'),
         children: [
-          for (final m in ThemeMode.values)
-            RadioListTile<ThemeMode>(
-              value: m,
-              groupValue: current,
-              title: Text(ThemeController.label(m)),
-              onChanged: (v) => Navigator.pop(context, v),
+          RadioGroup<ThemeMode>(
+            groupValue: current,
+            onChanged: (v) => Navigator.pop(context, v),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final m in ThemeMode.values)
+                  RadioListTile<ThemeMode>(
+                    value: m,
+                    title: Text(ThemeController.label(m)),
+                  ),
+              ],
             ),
+          ),
         ],
       ),
     );
