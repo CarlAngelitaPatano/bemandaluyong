@@ -46,3 +46,7 @@ app.*.map.json
 
 # Stray unused backup of an older android/ project
 /android_backup/
+
+# Accidental build/verbose log dumps
+/debug_log*.txt
+/verbose_log*.txt
