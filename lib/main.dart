@@ -23,6 +23,7 @@ import 'search.dart';
 import 'dining.dart';
 import 'weather.dart';
 import 'local_notifs.dart';
+import 'avatars.dart'; // built-in avatar option
 
 void main() async {
   // Required before any async work in main().
@@ -104,6 +105,7 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   int _selectedIndex = 0;
   Uint8List? _avatarBytes; // current user's profile photo for the app bar
+  String? _presetId; // built-in avatar id, if the user chose one
   int _unread = 0; // unread notification count for the bell badge
 
   // One widget per bottom-nav tab.
@@ -132,7 +134,13 @@ class _HomeShellState extends State<HomeShell> {
 
   Future<void> _loadAvatar() async {
     final bytes = await ProfileAvatarStore.load();
-    if (mounted) setState(() => _avatarBytes = bytes);
+    final preset = await ProfileAvatarStore.loadPreset();
+    if (mounted) {
+      setState(() {
+        _avatarBytes = bytes;
+        _presetId = preset;
+      });
+    }
   }
 
   Future<void> _loadUnread() async {
@@ -165,24 +173,39 @@ class _HomeShellState extends State<HomeShell> {
       appBar: AppBar(
         titleSpacing: 0,
         centerTitle: true,
-        leading: Padding(
-          padding: const EdgeInsets.only(left: 12),
+        leadingWidth: 60,
+        leading: Center(
           child: GestureDetector(
             onTap: () => _onTab(2), // jump to the Profile tab
-            child: CircleAvatar(
-              radius: 18,
-              backgroundColor: colors.primaryContainer,
-              backgroundImage:
-                  _avatarBytes != null ? MemoryImage(_avatarBytes!) : null,
-              child: _avatarBytes == null
-                  ? Text(
-                      initial,
-                      style: TextStyle(
-                        color: colors.onPrimaryContainer,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    )
-                  : null,
+            child: Container(
+              margin: const EdgeInsets.only(left: 12),
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: colors.primary.withValues(alpha: 0.25),
+                  width: 2,
+                ),
+              ),
+              child: (_avatarBytes == null && presetAvatarById(_presetId) != null)
+                  ? PresetAvatarCircle(
+                      avatar: presetAvatarById(_presetId)!, radius: 18)
+                  : CircleAvatar(
+                      radius: 18,
+                      backgroundColor: colors.primaryContainer,
+                      backgroundImage: _avatarBytes != null
+                          ? MemoryImage(_avatarBytes!)
+                          : null,
+                      child: _avatarBytes == null
+                          ? Text(
+                              initial,
+                              style: TextStyle(
+                                color: colors.onPrimaryContainer,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            )
+                          : null,
+                    ),
             ),
           ),
         ),

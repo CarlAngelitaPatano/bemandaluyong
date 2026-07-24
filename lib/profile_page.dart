@@ -13,6 +13,8 @@ import 'theme.dart'; // AppTheme.cityRed
 import 'theme_controller.dart'; // light/dark/system setting
 import 'achievements.dart'; // TrailBadge, kBadges
 import 'motion.dart'; // Reveal / PopIn animations
+import 'face_check.dart'; // profile-photo face verification
+import 'avatars.dart'; // built-in avatar option
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
 /// keyed per account). Shared so other screens (e.g. the home app bar) can
@@ -37,6 +39,21 @@ class ProfileAvatarStore {
       return null;
     }
   }
+
+  // ---- Built-in avatar (used instead of a photo, if chosen) ----
+
+  static String? presetKeyForCurrentUser() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    return uid == null ? null : 'profile_avatar_$uid';
+  }
+
+  /// Id of the chosen built-in avatar, or null if none.
+  static Future<String?> loadPreset() async {
+    final key = presetKeyForCurrentUser();
+    if (key == null) return null;
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(key);
+  }
 }
 
 /// The Profile tab — shows the logged-in user and account actions.
@@ -53,6 +70,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
   final ImagePicker _picker = ImagePicker();
   Uint8List? _avatarBytes; // saved profile photo, if any
+  String? _presetId; // chosen built-in avatar, if any
 
   // Each account gets its own saved photo on this device.
   String? get _avatarKey => ProfileAvatarStore.keyForCurrentUser();
@@ -65,8 +83,12 @@ class _ProfilePageState extends State<ProfilePage> {
 
   Future<void> _loadAvatar() async {
     final bytes = await ProfileAvatarStore.load();
-    if (bytes != null && mounted) {
-      setState(() => _avatarBytes = bytes);
+    final preset = await ProfileAvatarStore.loadPreset();
+    if (mounted) {
+      setState(() {
+        _avatarBytes = bytes;
+        _presetId = preset;
+      });
     }
   }
 
@@ -94,6 +116,15 @@ class _ProfilePageState extends State<ProfilePage> {
                 _pickAvatar(ImageSource.gallery);
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.face_retouching_natural_outlined),
+              title: const Text('Use an avatar instead'),
+              subtitle: const Text('No photo needed'),
+              onTap: () {
+                Navigator.pop(context);
+                _pickPresetAvatar();
+              },
+            ),
             if (_avatarBytes != null)
               ListTile(
                 leading: const Icon(Icons.delete_outline,
@@ -119,6 +150,46 @@ class _ProfilePageState extends State<ProfilePage> {
         imageQuality: 85,
       );
       if (img == null) return;
+
+      // ---- Security check: the photo must show a real human face ----
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const AlertDialog(
+            content: Row(
+              children: [
+                CircularProgressIndicator(),
+                SizedBox(width: AppSpacing.l),
+                Expanded(child: Text('Verifying your photo…')),
+              ],
+            ),
+          ),
+        );
+      }
+      final result = await FaceCheckService.check(img.path);
+      if (mounted) Navigator.of(context).pop(); // close the checking dialog
+
+      if (result != FaceCheck.ok && result != FaceCheck.failed) {
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            icon: const Icon(Icons.no_accounts_outlined,
+                color: AppTheme.cityRed, size: 40),
+            title: const Text('Photo not accepted'),
+            content: Text(result.message),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Try another photo'),
+              ),
+            ],
+          ),
+        );
+        return; // blocked — nothing is saved
+      }
+
       final bytes = await img.readAsBytes();
       final key = _avatarKey;
       if (key == null) return;
@@ -127,7 +198,15 @@ class _ProfilePageState extends State<ProfilePage> {
       if (!mounted) return;
       setState(() => _avatarBytes = bytes);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Profile photo updated')),
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.verified_user, color: Colors.white, size: 20),
+              const SizedBox(width: AppSpacing.s),
+              const Expanded(child: Text('Face verified — photo updated')),
+            ],
+          ),
+        ),
       );
     } catch (_) {
       if (!mounted) return;
@@ -137,13 +216,38 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  /// Lets the user pick one of the built-in avatars (no face photo needed).
+  Future<void> _pickPresetAvatar() async {
+    final id = await showAvatarPicker(context);
+    if (id == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    final presetKey = ProfileAvatarStore.presetKeyForCurrentUser();
+    if (presetKey != null) await prefs.setString(presetKey, id);
+    // An avatar replaces any uploaded photo.
+    final photoKey = _avatarKey;
+    if (photoKey != null) await prefs.remove(photoKey);
+    if (!mounted) return;
+    setState(() {
+      _presetId = id;
+      _avatarBytes = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Avatar updated')),
+    );
+  }
+
   Future<void> _removeAvatar() async {
     final key = _avatarKey;
     if (key == null) return;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(key);
+    final presetKey = ProfileAvatarStore.presetKeyForCurrentUser();
+    if (presetKey != null) await prefs.remove(presetKey);
     if (!mounted) return;
-    setState(() => _avatarBytes = null);
+    setState(() {
+      _avatarBytes = null;
+      _presetId = null;
+    });
   }
 
   Future<void> _chooseAppearance() async {
@@ -267,23 +371,31 @@ class _ProfilePageState extends State<ProfilePage> {
                   delayMs: 60,
                   child: Stack(
                   children: [
-                    CircleAvatar(
-                      radius: 48,
-                      backgroundColor: colors.primaryContainer,
-                      backgroundImage: _avatarBytes != null
-                          ? MemoryImage(_avatarBytes!)
-                          : null,
-                      child: _avatarBytes == null
-                          ? Text(
-                              initial,
-                              style: TextStyle(
-                                fontSize: 36,
-                                fontWeight: FontWeight.bold,
-                                color: colors.onPrimaryContainer,
-                              ),
-                            )
-                          : null,
-                    ),
+                    // Photo → built-in avatar → initial (in that order).
+                    if (_avatarBytes == null &&
+                        presetAvatarById(_presetId) != null)
+                      PresetAvatarCircle(
+                        avatar: presetAvatarById(_presetId)!,
+                        radius: 48,
+                      )
+                    else
+                      CircleAvatar(
+                        radius: 48,
+                        backgroundColor: colors.primaryContainer,
+                        backgroundImage: _avatarBytes != null
+                            ? MemoryImage(_avatarBytes!)
+                            : null,
+                        child: _avatarBytes == null
+                            ? Text(
+                                initial,
+                                style: TextStyle(
+                                  fontSize: 36,
+                                  fontWeight: FontWeight.bold,
+                                  color: colors.onPrimaryContainer,
+                                ),
+                              )
+                            : null,
+                      ),
                     // Small camera badge to show the photo is editable.
                     Positioned(
                       bottom: 0,
