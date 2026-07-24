@@ -36,6 +36,15 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // Skip stripping native (.so) debug symbols. The strip step shells out to
+    // the NDK's llvm-strip, which fails to launch on low-memory machines.
+    // Keeping the symbols avoids that step entirely (APK is a bit larger).
+    packaging {
+        jniLibs {
+            keepDebugSymbols.add("**/*.so")
+        }
+    }
 }
 
 kotlin {

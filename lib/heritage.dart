@@ -1274,10 +1274,12 @@ class _CertificatePageState extends State<CertificatePage> {
       final dir = await getTemporaryDirectory();
       final file = File('${dir.path}/be_mandaluyong_certificate.png');
       await file.writeAsBytes(bytes);
-      await Share.shareXFiles(
-        [XFile(file.path)],
-        text: 'I completed the Heritage Church Trail of Mandaluyong! '
-            '🏛️ — Be@Mandaluyong',
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          text: 'I completed the Heritage Church Trail of Mandaluyong! '
+              '🏛️ — Be@Mandaluyong',
+        ),
       );
     } catch (_) {
       if (!mounted) return;

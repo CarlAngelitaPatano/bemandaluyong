@@ -25,7 +25,7 @@ class LocalNotifs {
       const androidInit =
           AndroidInitializationSettings('@mipmap/ic_launcher');
       await _plugin.initialize(
-        const InitializationSettings(android: androidInit),
+        settings: const InitializationSettings(android: androidInit),
       );
 
       // Android 13+ runtime permission for notifications.
@@ -62,11 +62,11 @@ class LocalNotifs {
       ),
     );
     await _plugin.zonedSchedule(
-      1001, // stable id — rescheduling replaces, never duplicates
-      'Good morning! ☀️',
-      'Check today\'s Mandaluyong weather and continue your Heritage Trail.',
-      _next7am(),
-      details,
+      id: 1001, // stable id — rescheduling replaces, never duplicates
+      title: 'Good morning! ☀️',
+      body: 'Check today\'s Mandaluyong weather and continue your Heritage Trail.',
+      scheduledDate: _next7am(),
+      notificationDetails: details,
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
       matchDateTimeComponents: DateTimeComponents.time, // repeat daily at 7 AM
     );
