@@ -5,6 +5,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'main.dart'; // for HomeShell (the screen shown after login)
+import 'user_role.dart'; // Tourist / Mandaleño
 import 'theme.dart'; // light theme for the auth screens
 import 'phone_signin.dart'; // phone number / SMS sign-in
 import 'heritage.dart'; // TrailProgress (demo unlock)
@@ -546,6 +547,9 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.remove('saved_email');
       }
 
+      // Load this account's role so the dashboard shows the right content.
+      await UserRoleStore.load();
+
       if (isDemo) {
         // Demo account: unlock the whole trail so every feature is showcased.
         TrailProgress.unlockAll();
@@ -718,6 +722,7 @@ class _RegisterPageState extends State<RegisterPage> {
   final _confirm = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
+  UserRole _role = UserRole.tourist; // Tourist by default
 
   @override
   void dispose() {
@@ -737,6 +742,9 @@ class _RegisterPageState extends State<RegisterPage> {
         password: _password.text,
       );
       await cred.user?.updateDisplayName(_name.text.trim());
+      // Remember whether they're a Tourist or a Mandaleño (saved per account
+      // while they're still signed in, so the dashboard adapts on first login).
+      await UserRoleStore.save(_role);
       // Send a verification link to prove the email is real & owned by them.
       await cred.user?.sendEmailVerification();
       // Keep them signed out until they verify.
@@ -793,6 +801,29 @@ class _RegisterPageState extends State<RegisterPage> {
               ),
             ),
             const SizedBox(height: 20),
+
+            // ---- Who's signing up? Tourist or Mandaleño ----
+            Text(
+              'I am a…',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            RoleOptionCard(
+              role: UserRole.tourist,
+              selected: _role == UserRole.tourist,
+              onTap: () => setState(() => _role = UserRole.tourist),
+            ),
+            const SizedBox(height: 8),
+            RoleOptionCard(
+              role: UserRole.mandaleno,
+              selected: _role == UserRole.mandaleno,
+              onTap: () => setState(() => _role = UserRole.mandaleno),
+            ),
+            const SizedBox(height: 20),
+
             TextFormField(
               controller: _name,
               decoration: const InputDecoration(

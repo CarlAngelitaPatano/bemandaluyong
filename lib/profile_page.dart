@@ -15,6 +15,7 @@ import 'achievements.dart'; // TrailBadge, kBadges
 import 'motion.dart'; // Reveal / PopIn animations
 import 'face_check.dart'; // profile-photo face verification
 import 'avatars.dart'; // built-in avatar option
+import 'user_role.dart'; // Tourist / Mandaleño
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
 /// keyed per account). Shared so other screens (e.g. the home app bar) can
@@ -71,6 +72,11 @@ class _ProfilePageState extends State<ProfilePage> {
   final ImagePicker _picker = ImagePicker();
   Uint8List? _avatarBytes; // saved profile photo, if any
   String? _presetId; // chosen built-in avatar, if any
+  UserRole _role = UserRoleStore.current; // Tourist / Mandaleño
+
+  /// Only the demo account may switch roles (to showcase both dashboards).
+  bool get _isDemoAccount =>
+      FirebaseAuth.instance.currentUser?.email?.toLowerCase() == kDemoEmail;
 
   // Each account gets its own saved photo on this device.
   String? get _avatarKey => ProfileAvatarStore.keyForCurrentUser();
@@ -84,12 +90,58 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<void> _loadAvatar() async {
     final bytes = await ProfileAvatarStore.load();
     final preset = await ProfileAvatarStore.loadPreset();
+    final role = await UserRoleStore.load();
     if (mounted) {
       setState(() {
         _avatarBytes = bytes;
         _presetId = preset;
+        _role = role;
       });
     }
+  }
+
+  /// Lets the user switch between Tourist and Mandaleño.
+  Future<void> _changeRole() async {
+    final chosen = await showModalBottomSheet<UserRole>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('I am a…',
+                  style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 4),
+              Text(
+                'This changes what your home screen shows first.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: AppSpacing.l),
+              RoleOptionCard(
+                role: UserRole.tourist,
+                selected: _role == UserRole.tourist,
+                onTap: () => Navigator.pop(context, UserRole.tourist),
+              ),
+              const SizedBox(height: AppSpacing.m),
+              RoleOptionCard(
+                role: UserRole.mandaleno,
+                selected: _role == UserRole.mandaleno,
+                onTap: () => Navigator.pop(context, UserRole.mandaleno),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (chosen == null) return;
+    await UserRoleStore.save(chosen);
+    if (!mounted) return;
+    setState(() => _role = chosen);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('You\'re now browsing as ${chosen.label}')),
+    );
   }
 
   /// Opens the photo source chooser (camera / gallery / remove).
@@ -422,6 +474,32 @@ class _ProfilePageState extends State<ProfilePage> {
               Text(name, style: text.titleLarge),
               const SizedBox(height: 2),
               Text(email, style: text.bodyMedium?.copyWith(color: colors.outline)),
+              const SizedBox(height: AppSpacing.s),
+              // Tourist / Mandaleño badge
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _role.color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(
+                      color: _role.color.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(_role.icon, size: 15, color: _role.color),
+                    const SizedBox(width: 6),
+                    Text(
+                      _role.label,
+                      style: text.labelMedium?.copyWith(
+                        color: _role.color,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -563,6 +641,19 @@ class _ProfilePageState extends State<ProfilePage> {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: _chooseAppearance,
               ),
+              // Role switching is a demo-account convenience only, so both
+              // the Tourist and Mandaleño dashboards can be shown in one
+              // session. Regular users pick their role when signing up.
+              if (_isDemoAccount) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: Icon(_role.icon, color: _role.color),
+                  title: const Text('I am a…'),
+                  subtitle: Text('${_role.label}  ·  demo only'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _changeRole,
+                ),
+              ],
               const Divider(height: 1),
               ListTile(
                 leading: const Icon(Icons.feedback_outlined),

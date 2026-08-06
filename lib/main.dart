@@ -24,6 +24,9 @@ import 'dining.dart';
 import 'weather.dart';
 import 'local_notifs.dart';
 import 'avatars.dart'; // built-in avatar option
+import 'user_role.dart'; // Tourist / Mandaleño
+import 'emergency.dart'; // emergency hotlines
+import 'mayor_updates.dart'; // Mayor's Updates
 
 void main() async {
   // Required before any async work in main().
@@ -128,6 +131,10 @@ class _HomeShellState extends State<HomeShell> {
         if (mounted) setState(() {});
       });
     }
+    // Load Tourist / Mandaleño so the dashboard shows the right content.
+    UserRoleStore.load().then((_) {
+      if (mounted) setState(() {});
+    });
     _loadAvatar();
     _loadUnread();
   }
@@ -276,6 +283,9 @@ class HomePage extends StatelessWidget {
           page: (_) => const ArIntroPage()),
     ];
     final cityServices = <_Feature>[
+      _Feature("Mayor's Updates", Icons.campaign_rounded,
+          color: const Color(0xFF00838F), // teal-cyan
+          page: (_) => const MayorUpdatesPage()),
       _Feature('News', Icons.newspaper_rounded,
           color: const Color(0xFF3949AB), // indigo
           page: (_) => const NewsPage()),
@@ -288,7 +298,17 @@ class HomePage extends StatelessWidget {
       _Feature('Contact', Icons.support_agent_rounded,
           color: const Color(0xFFFB8C00), // amber-orange
           page: (_) => const ReportConcernPage()),
+      _Feature('Emergency', Icons.emergency_rounded,
+          color: const Color(0xFFD32F2F), // emergency red
+          page: (_) => const EmergencyPage()),
     ];
+
+    // Tourists explore first; Mandaleños get city services first.
+    final role = UserRoleStore.current;
+    final primaryFeatures =
+        role == UserRole.mandaleno ? cityServices : explore;
+    final secondaryFeatures =
+        role == UserRole.mandaleno ? explore : cityServices;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(AppSpacing.l),
@@ -321,7 +341,12 @@ class HomePage extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        firstName == null ? greeting : '$greeting, $firstName',
+                        // Mandaleños are greeted as locals; tourists by name.
+                        role == UserRole.mandaleno
+                            ? '$greeting, Mandaleño!'
+                            : (firstName == null
+                                ? greeting
+                                : '$greeting, $firstName'),
                         style: text.titleMedium?.copyWith(
                           color: colors.onPrimary.withValues(alpha: 0.95),
                         ),
@@ -337,13 +362,92 @@ class HomePage extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Explore the heritage, culture, and services of '
-                  'Mandaluyong City.',
+                  // The welcome line speaks to who they are.
+                  role == UserRole.mandaleno
+                      ? 'Your city at your fingertips — services, news, and '
+                          'the heritage you call home.'
+                      : 'Explore the heritage, culture, and services of '
+                          'Mandaluyong City.',
                   style: text.bodyMedium?.copyWith(
                     color: colors.onPrimary.withValues(alpha: 0.9),
                   ),
                 ),
+                const SizedBox(height: AppSpacing.m),
+                // Role badge — Tourist or Mandaleño.
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.22),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(role.icon, size: 14, color: colors.onPrimary),
+                      const SizedBox(width: 6),
+                      Text(
+                        role.label,
+                        style: text.labelMedium?.copyWith(
+                          color: colors.onPrimary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          // Always one tap from help — for Tourists and Mandaleños alike.
+          _Reveal(
+            delayMs: 30,
+            child: Material(
+              color: const Color(0xFFD32F2F).withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(AppRadius.lg),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const EmergencyPage()),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.l, vertical: AppSpacing.m),
+                  child: Row(
+                    children: [
+                      const CircleAvatar(
+                        radius: 18,
+                        backgroundColor: Color(0xFFD32F2F),
+                        child: Icon(Icons.emergency_rounded,
+                            color: Colors.white, size: 20),
+                      ),
+                      const SizedBox(width: AppSpacing.m),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Emergency hotlines',
+                              style: text.titleSmall?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: const Color(0xFFD32F2F),
+                              ),
+                            ),
+                            Text(
+                              'Call 911, rescue, police, fire or hospital',
+                              style: text.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right,
+                          color: Color(0xFFD32F2F)),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
           const SizedBox(height: AppSpacing.xl),
@@ -356,8 +460,17 @@ class HomePage extends StatelessWidget {
           const _Reveal(delayMs: 200, child: _FeaturedTodayCard()),
           const SizedBox(height: AppSpacing.xxl),
           _Reveal(
+              delayMs: 230,
+              child: Text("From the Mayor", style: text.titleMedium)),
+          const SizedBox(height: AppSpacing.m),
+          const _Reveal(delayMs: 250, child: _MayorSpotlightCard()),
+          // Section order follows the user's role: Tourists see "Explore"
+          // first, Mandaleños see "City & services" first.
+          const SizedBox(height: AppSpacing.xxl),
+          _Reveal(
               delayMs: 280,
-              child: Text('Explore Mandaluyong', style: text.titleMedium)),
+              child:
+                  Text(role.primarySectionTitle, style: text.titleMedium)),
           const SizedBox(height: AppSpacing.m),
           _Reveal(
             delayMs: 320,
@@ -368,13 +481,15 @@ class HomePage extends StatelessWidget {
               mainAxisSpacing: AppSpacing.m,
               crossAxisSpacing: AppSpacing.m,
               childAspectRatio: 1.3,
-              children: explore.map((f) => _FeatureCard(feature: f)).toList(),
+              children:
+                  primaryFeatures.map((f) => _FeatureCard(feature: f)).toList(),
             ),
           ),
           const SizedBox(height: AppSpacing.xxl),
           _Reveal(
               delayMs: 400,
-              child: Text('City & services', style: text.titleMedium)),
+              child:
+                  Text(role.secondarySectionTitle, style: text.titleMedium)),
           const SizedBox(height: AppSpacing.m),
           _Reveal(
             delayMs: 440,
@@ -385,8 +500,9 @@ class HomePage extends StatelessWidget {
               mainAxisSpacing: AppSpacing.m,
               crossAxisSpacing: AppSpacing.m,
               childAspectRatio: 1.3,
-              children:
-                  cityServices.map((f) => _FeatureCard(feature: f)).toList(),
+              children: secondaryFeatures
+                  .map((f) => _FeatureCard(feature: f))
+                  .toList(),
             ),
           ),
 
@@ -716,6 +832,73 @@ class _RevealState extends State<_Reveal> {
         duration: const Duration(milliseconds: 450),
         curve: Curves.easeOutCubic,
         child: widget.child,
+      ),
+    );
+  }
+}
+
+/// Spotlight card that opens the Mayor's official Facebook updates.
+class _MayorSpotlightCard extends StatelessWidget {
+  const _MayorSpotlightCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      color: colors.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg)),
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const MayorUpdatesPage()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF1877F2), Color(0xFF0A4DA2)],
+                  ),
+                ),
+                child: const Icon(Icons.campaign_rounded,
+                    color: Colors.white, size: 26),
+              ),
+              const SizedBox(width: AppSpacing.l),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Mayor Menchie Abalos',
+                      style:
+                          text.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Latest announcements, photos and videos from her '
+                      'official page',
+                      style: text.bodySmall?.copyWith(color: colors.outline),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s),
+              Icon(Icons.chevron_right, color: colors.outline),
+            ],
+          ),
+        ),
       ),
     );
   }
