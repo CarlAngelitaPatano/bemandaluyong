@@ -319,7 +319,6 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final displayName = FirebaseAuth.instance.currentUser?.displayName;
     final firstName = (displayName != null && displayName.trim().isNotEmpty)
