@@ -94,6 +94,12 @@ class NotificationService {
     }
 
     list.add(const AppNotification(
+      id: 'announcements_intro',
+      title: 'Official city announcements',
+      body: 'Advisories and updates from the Office of the City Mayor.',
+      icon: Icons.campaign_outlined,
+    ));
+    list.add(const AppNotification(
       id: 'news_intro',
       title: 'Latest Mandaluyong news',
       body: 'Catch up on the newest headlines about the city.',

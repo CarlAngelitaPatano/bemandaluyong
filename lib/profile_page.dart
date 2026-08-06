@@ -15,6 +15,9 @@ import 'achievements.dart'; // TrailBadge, kBadges
 import 'motion.dart'; // Reveal / PopIn animations
 import 'face_check.dart'; // profile-photo face verification
 import 'avatars.dart'; // built-in avatar option
+import 'user_role.dart'; // Tourist / Mandaleño
+import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
+import 'admin_panel.dart'; // CCAT staff panel
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
 /// keyed per account). Shared so other screens (e.g. the home app bar) can
@@ -71,6 +74,11 @@ class _ProfilePageState extends State<ProfilePage> {
   final ImagePicker _picker = ImagePicker();
   Uint8List? _avatarBytes; // saved profile photo, if any
   String? _presetId; // chosen built-in avatar, if any
+  UserRole _role = UserRoleStore.current; // Tourist / Mandaleño
+
+  /// Only the demo account may switch roles (to showcase both dashboards).
+  bool get _isDemoAccount =>
+      FirebaseAuth.instance.currentUser?.email?.toLowerCase() == kDemoEmail;
 
   // Each account gets its own saved photo on this device.
   String? get _avatarKey => ProfileAvatarStore.keyForCurrentUser();
@@ -84,12 +92,59 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<void> _loadAvatar() async {
     final bytes = await ProfileAvatarStore.load();
     final preset = await ProfileAvatarStore.loadPreset();
+    final role = await UserRoleStore.load();
+    await StaffAccess.check(); // is this account CCAT staff?
     if (mounted) {
       setState(() {
         _avatarBytes = bytes;
         _presetId = preset;
+        _role = role;
       });
     }
+  }
+
+  /// Lets the user switch between Tourist and Mandaleño.
+  Future<void> _changeRole() async {
+    final chosen = await showModalBottomSheet<UserRole>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.xl),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('I am a…',
+                  style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 4),
+              Text(
+                'This changes what your home screen shows first.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: AppSpacing.l),
+              RoleOptionCard(
+                role: UserRole.tourist,
+                selected: _role == UserRole.tourist,
+                onTap: () => Navigator.pop(context, UserRole.tourist),
+              ),
+              const SizedBox(height: AppSpacing.m),
+              RoleOptionCard(
+                role: UserRole.mandaleno,
+                selected: _role == UserRole.mandaleno,
+                onTap: () => Navigator.pop(context, UserRole.mandaleno),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (chosen == null) return;
+    await UserRoleStore.save(chosen);
+    if (!mounted) return;
+    setState(() => _role = chosen);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('You\'re now browsing as ${chosen.label}')),
+    );
   }
 
   /// Opens the photo source chooser (camera / gallery / remove).
@@ -422,12 +477,49 @@ class _ProfilePageState extends State<ProfilePage> {
               Text(name, style: text.titleLarge),
               const SizedBox(height: 2),
               Text(email, style: text.bodyMedium?.copyWith(color: colors.outline)),
+              const SizedBox(height: AppSpacing.s),
+              // Role badge — "CCAT Officer" for staff, Tourist/Mandaleño
+              // for visitors.
+              Builder(builder: (context) {
+                final staff = StaffAccess.isStaff;
+                final badgeColor =
+                    staff ? colors.primary : _role.color;
+                final badgeIcon = staff
+                    ? Icons.admin_panel_settings_outlined
+                    : _role.icon;
+                final badgeLabel = staff ? 'CCAT Officer' : _role.label;
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: badgeColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                        color: badgeColor.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(badgeIcon, size: 15, color: badgeColor),
+                      const SizedBox(width: 6),
+                      Text(
+                        badgeLabel,
+                        style: text.labelMedium?.copyWith(
+                          color: badgeColor,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }),
             ],
           ),
         ),
         const SizedBox(height: AppSpacing.xxl),
 
-        // ----- Trail progress -----
+        // ----- Trail progress (visitors only — not relevant to CCAT staff) --
+        if (!StaffAccess.isStaff)
         Reveal(
           delayMs: 120,
           child: Card(
@@ -455,7 +547,8 @@ class _ProfilePageState extends State<ProfilePage> {
                       value: v,
                       minHeight: 10,
                       backgroundColor: colors.surfaceContainerHighest,
-                      color: completed ? success : colors.primary,
+                      // Gold = progress/achievement.
+                      color: AppTheme.brandGold,
                     ),
                   ),
                 ),
@@ -488,32 +581,34 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         const SizedBox(height: AppSpacing.xl),
 
-        // ----- Achievements -----
-        Text('Achievements', style: text.titleMedium),
-        const SizedBox(height: 2),
-        Text(
-          '${kBadges.where((b) => visited >= b.threshold).length} of '
-          '${kBadges.length} earned',
-          style: text.bodySmall?.copyWith(color: colors.outline),
-        ),
-        const SizedBox(height: AppSpacing.m),
-        SizedBox(
-          height: 110,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: kBadges.length,
-            separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.l),
-            // Badges pop in one after another with a springy bounce.
-            itemBuilder: (context, i) => PopIn(
-              delayMs: 250 + i * 90,
-              child: _BadgeTile(
-                badge: kBadges[i],
-                earned: visited >= kBadges[i].threshold,
+        // ----- Achievements (visitors only) -----
+        if (!StaffAccess.isStaff) ...[
+          Text('Achievements', style: text.titleMedium),
+          const SizedBox(height: 2),
+          Text(
+            '${kBadges.where((b) => visited >= b.threshold).length} of '
+            '${kBadges.length} earned',
+            style: text.bodySmall?.copyWith(color: colors.outline),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          SizedBox(
+            height: 110,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: kBadges.length,
+              separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.l),
+              // Badges pop in one after another with a springy bounce.
+              itemBuilder: (context, i) => PopIn(
+                delayMs: 250 + i * 90,
+                child: _BadgeTile(
+                  badge: kBadges[i],
+                  earned: visited >= kBadges[i].threshold,
+                ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.xl),
+        ],
 
         // ----- Account -----
         Text('Account', style: text.titleMedium),
@@ -546,6 +641,32 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         const SizedBox(height: AppSpacing.xl),
 
+        // ----- CCAT staff panel (only for registered staff accounts) -----
+        if (StaffAccess.isStaff) ...[
+          Reveal(
+            delayMs: 300,
+            child: Card(
+              color: colors.primary.withValues(alpha: 0.06),
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: colors.primary.withValues(alpha: 0.12),
+                  child: Icon(Icons.admin_panel_settings_outlined,
+                      color: colors.primary),
+                ),
+                title: const Text('CCAT Staff Panel'),
+                subtitle:
+                    const Text('Review applications, publish announcements'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AdminPanelPage()),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+        ],
+
         // ----- Settings -----
         Text('Settings', style: text.titleMedium),
         const SizedBox(height: AppSpacing.s),
@@ -563,11 +684,35 @@ class _ProfilePageState extends State<ProfilePage> {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: _chooseAppearance,
               ),
+              // Role switching is a demo-account convenience only, so both
+              // the Tourist and Mandaleño dashboards can be shown in one
+              // session. Regular users pick their role when signing up.
+              if (_isDemoAccount) ...[
+                const Divider(height: 1),
+                ListTile(
+                  leading: Icon(_role.icon, color: _role.color),
+                  title: const Text('I am a…'),
+                  subtitle: Text('${_role.label}  ·  demo only'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _changeRole,
+                ),
+              ],
               const Divider(height: 1),
               ListTile(
-                leading: const Icon(Icons.feedback_outlined),
-                title: const Text('Send feedback'),
-                subtitle: const Text('Report a bug or share a suggestion'),
+                leading: const Icon(Icons.rate_review_outlined),
+                title: const Text('Share your feedback'),
+                subtitle: const Text('Rate your experience — sent to CCAT'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const FeedbackPage()),
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.bug_report_outlined),
+                title: const Text('Report a problem'),
+                subtitle: const Text('Email the developers about a bug'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: _sendFeedback,
               ),
@@ -883,7 +1028,6 @@ class _BadgeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final success = AppTheme.successFor(Theme.of(context).brightness);
     return GestureDetector(
       onTap: () => ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -911,12 +1055,13 @@ class _BadgeTile extends StatelessWidget {
                         earned ? colors.onTertiaryContainer : colors.outline,
                   ),
                 ),
-                // Green check when the challenge is complete.
+                // Gold check when the challenge is complete (achievement).
                 if (earned)
                   CircleAvatar(
                     radius: 9,
                     backgroundColor: colors.surface,
-                    child: Icon(Icons.check_circle, size: 16, color: success),
+                    child: const Icon(Icons.check_circle,
+                        size: 16, color: AppTheme.brandGold),
                   ),
               ],
             ),

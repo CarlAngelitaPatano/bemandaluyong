@@ -16,6 +16,8 @@ import 'city_content.dart'; // for the shared LeadingThumb widget
 import 'theme.dart'; // design tokens (AppTheme.success, AppSpacing, AppRadius)
 import 'achievements.dart'; // trail badges + unlock celebration
 import 'motion.dart'; // Reveal / PopIn animations
+import 'cloud_sync.dart'; // shared account progress (app ↔ website)
+import 'user_role.dart'; // Tourist / Mandaleño
 
 /// A heritage church in Mandaluyong.
 class Church {
@@ -629,18 +631,53 @@ class TrailProgress {
     await prefs.setString(_proofsKey, jsonEncode(proofs));
   }
 
+  /// Merges this device's progress with the account's progress in the shared
+  /// database, so the trail is the same on the app and the website.
+  /// Call after login (and at startup for a remembered session).
+  static Future<void> syncWithCloud() async {
+    // Pull anything verified on another platform (e.g. the website).
+    final remote = await CloudSync.fetchVisited();
+    if (remote != null && remote.isNotEmpty) {
+      final before = visited.length;
+      visited.addAll(remote); // union — nothing is ever lost
+      if (visited.length != before) await _save();
+    }
+    // Push this device's progress up.
+    await CloudSync.pushProgress(
+      visited: visited,
+      totalChurches: kChurches.length,
+      userType: UserRoleStore.current.label,
+    );
+  }
+
   /// Marks a church verified once the required photo proof is provided,
-  /// and saves it so it survives app restarts.
+  /// saves it locally, and syncs it to the shared account.
   static Future<void> markVerified(Church c, List<String> photoPaths) async {
     proofs[c.name] = photoPaths;
     visited.add(c.name);
     await _save();
+    // Make the new stop visible on the website too.
+    await CloudSync.pushProgress(
+      visited: visited,
+      totalChurches: kChurches.length,
+      userType: UserRoleStore.current.label,
+    );
   }
 
+  /// Pushes the current progress to the shared account (app ↔ website).
+  static Future<void> pushToCloud() => CloudSync.pushProgress(
+        visited: visited,
+        totalChurches: kChurches.length,
+        userType: UserRoleStore.current.label,
+      );
+
   /// Unlocks the entire trail in memory (used by the demo account). Not saved
-  /// to storage, so it only lasts for the current session.
-  static void unlockAll() {
+  /// to device storage, so it only lasts for the current session — but it IS
+  /// pushed to the shared database so the demo also looks complete when the
+  /// same account is opened on the website.
+  static Future<void> unlockAll() async {
     visited.addAll(kChurches.map((c) => c.name));
+    await pushToCloud();
   }
 }
 
@@ -737,6 +774,7 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
                 value: v,
                 minHeight: 10,
                 backgroundColor: colors.surfaceContainerHighest,
+                color: AppTheme.brandGold, // gold = achievement
               ),
             ),
           ),
@@ -785,16 +823,20 @@ class _CompletionBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [colors.primary, colors.tertiary],
+        // Navy field with a gold trophy — the certificate look.
+        gradient: const LinearGradient(
+          colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+            color: AppTheme.brandGold.withValues(alpha: 0.6), width: 1.5),
       ),
       child: Column(
         children: [
-          const Icon(Icons.emoji_events, color: Colors.amber, size: 44),
+          const Icon(Icons.emoji_events,
+              color: AppTheme.brandGold, size: 44),
           const SizedBox(height: 8),
           Text(
             'Trail Complete!',
@@ -814,8 +856,8 @@ class _CompletionBanner extends StatelessWidget {
           FilledButton.icon(
             onPressed: onClaim,
             style: FilledButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: colors.primary,
+              backgroundColor: AppTheme.brandGold,
+              foregroundColor: const Color(0xFF12305F),
             ),
             icon: const Icon(Icons.workspace_premium),
             label: const Text('Claim your certificate'),
@@ -843,7 +885,8 @@ class _TrailStop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final success = AppTheme.successFor(Theme.of(context).brightness);
+    // Verified stops are an achievement — gold, matching the trail system.
+    const success = AppTheme.brandGold;
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -855,7 +898,8 @@ class _TrailStop extends StatelessWidget {
                 radius: 18,
                 backgroundColor: verified ? success : colors.primary,
                 child: verified
-                    ? const Icon(Icons.check, color: Colors.white, size: 20)
+                    ? const Icon(Icons.check,
+                        color: Color(0xFF12305F), size: 20)
                     : Text(
                         '$index',
                         style: TextStyle(

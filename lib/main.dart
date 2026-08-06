@@ -24,6 +24,16 @@ import 'dining.dart';
 import 'weather.dart';
 import 'local_notifs.dart';
 import 'avatars.dart'; // built-in avatar option
+import 'user_role.dart'; // Tourist / Mandaleño
+import 'emergency.dart'; // emergency hotlines
+import 'announcements.dart'; // official city announcements
+import 'itinerary.dart'; // suggested itineraries
+import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
+import 'analytics_dashboard.dart'; // sentiment analytics dashboard
+import 'accreditation.dart'; // policy management / accreditation
+import 'admin_panel.dart'; // CCAT staff dashboard
+import 'sentiment_eval.dart'; // NLP accuracy report
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 void main() async {
   // Required before any async work in main().
@@ -108,12 +118,23 @@ class _HomeShellState extends State<HomeShell> {
   String? _presetId; // built-in avatar id, if the user chose one
   int _unread = 0; // unread notification count for the bell badge
 
-  // One widget per bottom-nav tab.
-  static const List<Widget> _pages = <Widget>[
+  // Visitors browse the city; CCAT staff manage it. Different tabs entirely.
+  static const List<Widget> _visitorPages = <Widget>[
     HomePage(),
     HeritageChurchesView(),
+    ServicesGridPage(),
     ProfilePage(),
   ];
+
+  static const List<Widget> _staffPages = <Widget>[
+    HomePage(), // renders the admin dashboard for staff
+    AdminPanelView(),
+    AnalyticsDashboardPage(embedded: true),
+    ProfilePage(),
+  ];
+
+  List<Widget> get _pages =>
+      StaffAccess.isStaff ? _staffPages : _visitorPages;
 
   @override
   void initState() {
@@ -122,14 +143,27 @@ class _HomeShellState extends State<HomeShell> {
     // where the demo session is still signed in). Real accounts reload their
     // actual saved progress, clearing any leftover demo unlock.
     if (FirebaseAuth.instance.currentUser?.email?.toLowerCase() == kDemoEmail) {
-      TrailProgress.unlockAll();
+      TrailProgress.unlockAll(); // also syncs to the shared account
     } else {
-      TrailProgress.load().then((_) {
+      // Load local progress, then merge with the shared account (website).
+      TrailProgress.load()
+          .then((_) => TrailProgress.syncWithCloud())
+          .then((_) {
         if (mounted) setState(() {});
       });
     }
+    // Load Tourist / Mandaleño so the dashboard shows the right content.
+    UserRoleStore.load().then((_) {
+      if (mounted) setState(() {});
+    });
     _loadAvatar();
     _loadUnread();
+    // Notify the user if the city published a new announcement.
+    AnnouncementService.checkForNew();
+    // Is this account CCAT staff? Changes the whole home screen.
+    StaffAccess.check().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _loadAvatar() async {
@@ -176,7 +210,7 @@ class _HomeShellState extends State<HomeShell> {
         leadingWidth: 60,
         leading: Center(
           child: GestureDetector(
-            onTap: () => _onTab(2), // jump to the Profile tab
+            onTap: () => _onTab(3), // jump to the Profile tab
             child: Container(
               margin: const EdgeInsets.only(left: 12),
               padding: const EdgeInsets.all(2),
@@ -209,14 +243,27 @@ class _HomeShellState extends State<HomeShell> {
             ),
           ),
         ),
-        title: const Text('Be@Mandaluyong'),
+        title: Text(
+            StaffAccess.isStaff ? 'CCAT Administration' : 'Be@Mandaluyong'),
         actions: [
-          IconButton(
-            tooltip: 'Search',
-            icon: const Icon(Icons.search),
-            onPressed: () =>
-                showSearch(context: context, delegate: AppSearchDelegate()),
-          ),
+          // Visitor search isn't useful to staff — they get the accuracy
+          // report instead.
+          if (StaffAccess.isStaff)
+            IconButton(
+              tooltip: 'Sentiment model accuracy',
+              icon: const Icon(Icons.science_outlined),
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const SentimentEvalPage()),
+              ),
+            )
+          else
+            IconButton(
+              tooltip: 'Search',
+              icon: const Icon(Icons.search),
+              onPressed: () =>
+                  showSearch(context: context, delegate: AppSearchDelegate()),
+            ),
           IconButton(
             tooltip: 'Notifications',
             icon: Badge(
@@ -232,10 +279,34 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: _onTab,
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
-          NavigationDestination(icon: Icon(Icons.explore_outlined), selectedIcon: Icon(Icons.explore), label: 'Explore'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
+        destinations: [
+          const NavigationDestination(
+              icon: Icon(Icons.home_outlined),
+              selectedIcon: Icon(Icons.home),
+              label: 'Home'),
+          if (StaffAccess.isStaff) ...[
+            const NavigationDestination(
+                icon: Icon(Icons.dashboard_outlined),
+                selectedIcon: Icon(Icons.dashboard),
+                label: 'Manage'),
+            const NavigationDestination(
+                icon: Icon(Icons.insights_outlined),
+                selectedIcon: Icon(Icons.insights),
+                label: 'Analytics'),
+          ] else ...[
+            const NavigationDestination(
+                icon: Icon(Icons.explore_outlined),
+                selectedIcon: Icon(Icons.explore),
+                label: 'Explore'),
+            const NavigationDestination(
+                icon: Icon(Icons.grid_view_outlined),
+                selectedIcon: Icon(Icons.grid_view_rounded),
+                label: 'Services'),
+          ],
+          const NavigationDestination(
+              icon: Icon(Icons.person_outline),
+              selectedIcon: Icon(Icons.person),
+              label: 'Profile'),
         ],
       ),
     );
@@ -248,7 +319,6 @@ class HomePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final displayName = FirebaseAuth.instance.currentUser?.displayName;
     final firstName = (displayName != null && displayName.trim().isNotEmpty)
@@ -259,58 +329,33 @@ class HomePage extends StatelessWidget {
         ? 'Good morning'
         : (hour < 18 ? 'Good afternoon' : 'Good evening');
 
-    // Home feature cards, grouped into two sections. Each feature has its own
-    // color identity (gradient) for a modern, professional look.
-    final explore = <_Feature>[
-      _Feature('Map', Icons.map_rounded,
-          color: const Color(0xFF1E88E5), // blue
-          page: (_) => const TrailMapPage()),
-      _Feature('Attractions', Icons.photo_camera_rounded,
-          color: const Color(0xFFF4511E), // deep orange
-          page: (_) => const AttractionsPage()),
-      _Feature('Homegrown', Icons.storefront_rounded,
-          color: const Color(0xFF8E24AA), // purple
-          page: (_) => const DiningPage()),
-      _Feature('3D / AR', Icons.view_in_ar_rounded,
-          color: const Color(0xFF00897B), // teal
-          page: (_) => const ArIntroPage()),
-    ];
-    final cityServices = <_Feature>[
-      _Feature('News', Icons.newspaper_rounded,
-          color: const Color(0xFF3949AB), // indigo
-          page: (_) => const NewsPage()),
-      _Feature('Events', Icons.event_rounded,
-          color: const Color(0xFFE53935), // red
-          page: (_) => const EventsPage()),
-      _Feature('Services', Icons.widgets_rounded,
-          color: const Color(0xFF43A047), // green
-          page: (_) => const ServicesPage()),
-      _Feature('Contact', Icons.support_agent_rounded,
-          color: const Color(0xFFFB8C00), // amber-orange
-          page: (_) => const ReportConcernPage()),
-    ];
+    // CCAT staff get a completely different, work-focused dashboard.
+    if (StaffAccess.isStaff) return const _AdminHomeView();
+
+    // Tourist or Mandaleño — decides the greeting and the "For you" card.
+    // (All feature tiles live in the Services tab.)
+    final role = UserRoleStore.current;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(AppSpacing.l),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Welcome banner
+          // ---- Welcome banner: deep navy with a gold signature ----
           Container(
-            padding: const EdgeInsets.all(AppSpacing.xxl),
+            padding: const EdgeInsets.all(AppSpacing.xl),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [colors.primary, colors.primaryContainer],
+              gradient: const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
+                colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
               ),
               borderRadius: BorderRadius.circular(AppRadius.xl),
-              // Soft glow lifts the banner off the background.
               boxShadow: [
                 BoxShadow(
-                  color: colors.primary.withValues(alpha: 0.35),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
+                  color: const Color(0xFF12305F).withValues(alpha: 0.22),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
                 ),
               ],
             ),
@@ -318,119 +363,118 @@ class HomePage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
                       child: Text(
-                        firstName == null ? greeting : '$greeting, $firstName',
-                        style: text.titleMedium?.copyWith(
-                          color: colors.onPrimary.withValues(alpha: 0.95),
+                        // Mandaleños are greeted as locals; tourists by name.
+                        role == UserRole.mandaleno
+                            ? '$greeting, Mandaleño'
+                            : (firstName == null
+                                ? greeting
+                                : '$greeting, $firstName'),
+                        style: text.bodyMedium?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.75),
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ),
                     const WeatherChip(),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: AppSpacing.s),
+                // Brand name in the heritage serif.
                 Text(
                   'Be@Mandaluyong',
-                  style: text.headlineSmall?.copyWith(color: colors.onPrimary),
+                  style: AppTheme.brandTextStyle(
+                    fontSize: 30,
+                    color: Colors.white,
+                  ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: AppSpacing.m),
+                // Gold signature rule — the seal's accent, used once.
+                Container(
+                  width: 44,
+                  height: 3,
+                  decoration: BoxDecoration(
+                    color: AppTheme.brandGold,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                ),
+                const SizedBox(height: AppSpacing.m),
+                // A line that changes with the time of day and the role.
                 Text(
-                  'Explore the heritage, culture, and services of '
-                  'Mandaluyong City.',
+                  _headline(role, hour),
                   style: text.bodyMedium?.copyWith(
-                    color: colors.onPrimary.withValues(alpha: 0.9),
+                    color: Colors.white.withValues(alpha: 0.9),
+                    height: 1.4,
                   ),
                 ),
               ],
             ),
           ),
+          const SizedBox(height: AppSpacing.l),
+
+          // Slim emergency link — present, but not shouting.
+          _Reveal(
+            delayMs: 30,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const EmergencyPage()),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.m, vertical: AppSpacing.s),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(
+                      color: const Color(0xFFD32F2F).withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.emergency_outlined,
+                        size: 18, color: Color(0xFFD32F2F)),
+                    const SizedBox(width: AppSpacing.s),
+                    Expanded(
+                      child: Text(
+                        'Emergency hotlines',
+                        style: text.bodyMedium?.copyWith(
+                          color: const Color(0xFFD32F2F),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right,
+                        size: 18, color: Color(0xFFD32F2F)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          // ---- 1. The app's flagship: trail progress ----
           const SizedBox(height: AppSpacing.xl),
           const _Reveal(delayMs: 60, child: _TrailProgressCard()),
+
+          // ---- 2. For you: two contextual cards under one label ----
           const SizedBox(height: AppSpacing.xxl),
           _Reveal(
-              delayMs: 160,
-              child: Text('Featured today', style: text.titleMedium)),
+              delayMs: 140,
+              child: Text('For you', style: _sectionStyle(context))),
           const SizedBox(height: AppSpacing.m),
-          const _Reveal(delayMs: 200, child: _FeaturedTodayCard()),
-          const SizedBox(height: AppSpacing.xxl),
-          _Reveal(
-              delayMs: 280,
-              child: Text('Explore Mandaluyong', style: text.titleMedium)),
+          const _Reveal(delayMs: 180, child: _FeaturedTodayCard()),
           const SizedBox(height: AppSpacing.m),
           _Reveal(
-            delayMs: 320,
-            child: GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: AppSpacing.m,
-              crossAxisSpacing: AppSpacing.m,
-              childAspectRatio: 1.3,
-              children: explore.map((f) => _FeatureCard(feature: f)).toList(),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xxl),
-          _Reveal(
-              delayMs: 400,
-              child: Text('City & services', style: text.titleMedium)),
-          const SizedBox(height: AppSpacing.m),
-          _Reveal(
-            delayMs: 440,
-            child: GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: AppSpacing.m,
-              crossAxisSpacing: AppSpacing.m,
-              childAspectRatio: 1.3,
-              children:
-                  cityServices.map((f) => _FeatureCard(feature: f)).toList(),
-            ),
+            delayMs: 220,
+            child: role == UserRole.tourist
+                ? const _ItinerarySpotlightCard()
+                : const _MayorSpotlightCard(),
           ),
 
-          // ---- Heritage Churches section ----
-          const SizedBox(height: AppSpacing.xxl),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Heritage Churches', style: text.titleMedium),
-              TextButton(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: const Text('Heritage Churches')),
-                      body: const HeritageChurchesView(),
-                    ),
-                  ),
-                ),
-                child: const Text('See all'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          // Horizontal scroller of featured churches
-          SizedBox(
-            height: 190,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: kChurches.length,
-              separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.m),
-              itemBuilder: (_, i) => FeaturedChurchCard(church: kChurches[i]),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.l),
-          // Trail button
-          FilledButton.icon(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const HeritageTrailPage()),
-            ),
-            icon: const Icon(Icons.map_outlined),
-            label: const Text('View the Heritage Church Trail'),
-          ),
+          // (All the feature tiles now live in the "Services" tab, keeping
+          // this dashboard calm and scannable.)
+          const SizedBox(height: AppSpacing.xl),
         ],
       ),
     );
@@ -468,7 +512,8 @@ class _FeatureCardState extends State<_FeatureCard> {
       curve: Curves.easeOut,
       child: Card(
       elevation: 0,
-      color: colors.surfaceContainerHighest,
+      color: Colors.transparent,
+      margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.md)),
       child: InkWell(
@@ -493,36 +538,25 @@ class _FeatureCardState extends State<_FeatureCard> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Squircle with a soft gradient + glow in the feature's color.
+              // One calm accent for every feature — no rainbow.
               Container(
-                width: 56,
-                height: 56,
+                width: 52,
+                height: 52,
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      feature.color.withValues(alpha: 0.85),
-                      feature.color,
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: feature.color.withValues(alpha: 0.4),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  color: colors.primary.withValues(alpha: 0.08),
+                  shape: BoxShape.circle,
                 ),
-                child: Icon(feature.icon, size: 28, color: Colors.white),
+                child: Icon(feature.icon, size: 24, color: colors.primary),
               ),
-              const SizedBox(height: AppSpacing.m),
+              const SizedBox(height: AppSpacing.s),
               Text(
                 feature.label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: Theme.of(context)
                     .textTheme
-                    .titleSmall
+                    .bodyMedium
                     ?.copyWith(fontWeight: FontWeight.w600),
               ),
             ],
@@ -580,7 +614,6 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final success = AppTheme.successFor(Theme.of(context).brightness);
 
     final visited = TrailProgress.visited.length;
     final total = kChurches.length;
@@ -661,7 +694,8 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
                 value: v,
                 minHeight: 10,
                 backgroundColor: colors.surfaceContainerHighest,
-                color: complete ? success : colors.primary,
+                // Gold = progress/achievement in the two-colour system.
+                color: AppTheme.brandGold,
               ),
             ),
           ),
@@ -716,6 +750,752 @@ class _RevealState extends State<_Reveal> {
         duration: const Duration(milliseconds: 450),
         curve: Curves.easeOutCubic,
         child: widget.child,
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// Services tab — every feature in one clean, grouped grid. Section order
+// follows the user's role (Mandaleños see city services first).
+// ===========================================================================
+class ServicesGridPage extends StatelessWidget {
+  const ServicesGridPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    final explore = <_Feature>[
+      _Feature('Itineraries', Icons.route_rounded,
+          color: const Color(0xFF6D4C41), page: (_) => const ItineraryPage()),
+      _Feature('Map', Icons.map_rounded,
+          color: const Color(0xFF1E88E5), page: (_) => const TrailMapPage()),
+      _Feature('Attractions', Icons.photo_camera_rounded,
+          color: const Color(0xFFF4511E),
+          page: (_) => const AttractionsPage()),
+      _Feature('Homegrown', Icons.storefront_rounded,
+          color: const Color(0xFF8E24AA), page: (_) => const DiningPage()),
+      _Feature('3D / AR', Icons.view_in_ar_rounded,
+          color: const Color(0xFF00897B), page: (_) => const ArIntroPage()),
+    ];
+    final cityServices = <_Feature>[
+      _Feature('Announcements', Icons.campaign_rounded,
+          color: const Color(0xFF00838F),
+          page: (_) => const AnnouncementsPage()),
+      _Feature('News', Icons.newspaper_rounded,
+          color: const Color(0xFF3949AB), page: (_) => const NewsPage()),
+      _Feature('Events', Icons.event_rounded,
+          color: const Color(0xFFE53935), page: (_) => const EventsPage()),
+      _Feature('Services', Icons.widgets_rounded,
+          color: const Color(0xFF43A047), page: (_) => const ServicesPage()),
+      _Feature('Contact', Icons.support_agent_rounded,
+          color: const Color(0xFFFB8C00),
+          page: (_) => const ReportConcernPage()),
+      _Feature('Feedback', Icons.rate_review_rounded,
+          color: const Color(0xFF00838F), page: (_) => const FeedbackPage()),
+      _Feature('Analytics', Icons.insights_rounded,
+          color: const Color(0xFF5E35B1),
+          page: (_) => const AnalyticsDashboardPage()),
+      _Feature('Accreditation', Icons.verified_outlined,
+          color: const Color(0xFF00695C),
+          page: (_) => const AccreditationPage()),
+    ];
+
+    final role = UserRoleStore.current;
+    final first = role == UserRole.mandaleno ? cityServices : explore;
+    final second = role == UserRole.mandaleno ? explore : cityServices;
+    final firstTitle = role.primarySectionTitle;
+    final secondTitle = role.secondarySectionTitle;
+
+    Widget grid(List<_Feature> items, int delay) => _Reveal(
+          delayMs: delay,
+          child: GridView.count(
+            crossAxisCount: 3,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: AppSpacing.s,
+            crossAxisSpacing: AppSpacing.s,
+            childAspectRatio: 0.95,
+            children: items.map((f) => _FeatureCard(feature: f)).toList(),
+          ),
+        );
+
+    return ListView(
+      padding: const EdgeInsets.all(AppSpacing.l),
+      children: [
+        _Reveal(
+          delayMs: 0,
+          child: Text('All features',
+              style: text.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700)),
+        ),
+        const SizedBox(height: 2),
+        _Reveal(
+          delayMs: 40,
+          child: Text(
+            'Everything Be@Mandaluyong can do, in one place.',
+            style: text.bodyMedium?.copyWith(color: colors.outline),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        _Reveal(delayMs: 80, child: Text(firstTitle, style: _sectionStyle(context))),
+        const SizedBox(height: AppSpacing.m),
+        grid(first, 120),
+        const SizedBox(height: AppSpacing.xxl),
+        _Reveal(
+            delayMs: 200, child: Text(secondTitle, style: _sectionStyle(context))),
+        const SizedBox(height: AppSpacing.m),
+        grid(second, 240),
+        const SizedBox(height: AppSpacing.xl),
+        // Emergency is always reachable from here too.
+        _Reveal(
+          delayMs: 300,
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const EmergencyPage()),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFD32F2F),
+              side: BorderSide(
+                  color: const Color(0xFFD32F2F).withValues(alpha: 0.5)),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.m),
+            ),
+            icon: const Icon(Icons.emergency_outlined),
+            label: const Text('Emergency hotlines'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A warm headline that changes with the time of day and who's reading it.
+/// Keeps the dashboard feeling alive without leaning on emoji.
+String _headline(UserRole role, int hour) {
+  final morning = hour < 12;
+  final afternoon = hour >= 12 && hour < 18;
+
+  if (role == UserRole.mandaleno) {
+    if (morning) {
+      return 'Your city is awake — services, news, and events for today.';
+    }
+    if (afternoon) {
+      return 'City services, news, and events, all in one place.';
+    }
+    return 'Catch up on today\'s news and updates from the city.';
+  }
+  if (morning) {
+    return 'A perfect morning to explore the heritage and culture of '
+        'Mandaluyong City.';
+  }
+  if (afternoon) {
+    return 'The city is waiting — heritage, food, and places to discover.';
+  }
+  return 'Explore the heritage, culture, and services of Mandaluyong City.';
+}
+
+// ===========================================================================
+// Admin home — the dashboard CCAT staff see instead of the visitor screen.
+// Work first: what needs attention, then quick actions. No trail progress,
+// featured churches or itineraries — those are visitor features.
+// ===========================================================================
+class _AdminHomeView extends StatefulWidget {
+  const _AdminHomeView();
+
+  @override
+  State<_AdminHomeView> createState() => _AdminHomeViewState();
+}
+
+class _AdminHomeViewState extends State<_AdminHomeView> {
+  int? _pending;
+  int? _feedback;
+  int? _users;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCounts();
+  }
+
+  Future<void> _loadCounts() async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final results = await Future.wait([
+        db.collection(kAccreditationCollection).get(),
+        db.collection('feedback').get(),
+        db.collection('users').get(),
+      ]);
+      if (!mounted) return;
+      setState(() {
+        _pending = results[0]
+            .docs
+            .where((d) => (d.data()['status'] ?? 'pending') == 'pending')
+            .length;
+        _feedback = results[1].docs.length;
+        _users = results[2].docs.length;
+      });
+    } catch (_) {
+      // Rules or connectivity — the tiles simply show a dash.
+    }
+  }
+
+  void _open(Widget page) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => page))
+        .then((_) => _loadCounts());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final name = FirebaseAuth.instance.currentUser?.displayName;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12
+        ? 'Good morning'
+        : (hour < 18 ? 'Good afternoon' : 'Good evening');
+
+    return RefreshIndicator(
+      onRefresh: _loadCounts,
+      child: ListView(
+        padding: const EdgeInsets.all(AppSpacing.l),
+        children: [
+          // ---- Identity bar ----
+          _Reveal(
+            delayMs: 0,
+            child: Container(
+              padding: const EdgeInsets.all(AppSpacing.l),
+              decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                border: Border(
+                  left: BorderSide(color: AppTheme.brandGold, width: 4),
+                  top: BorderSide(color: colors.outlineVariant),
+                  right: BorderSide(color: colors.outlineVariant),
+                  bottom: BorderSide(color: colors.outlineVariant),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: colors.primary,
+                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                    ),
+                    child: const Icon(Icons.account_balance_rounded,
+                        color: Colors.white, size: 22),
+                  ),
+                  const SizedBox(width: AppSpacing.m),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'CITY CULTURAL AFFAIRS & TOURISM',
+                          style: text.labelSmall?.copyWith(
+                            color: colors.outline,
+                            letterSpacing: 0.8,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          name == null || name.trim().isEmpty
+                              ? 'Administrator'
+                              : name.trim(),
+                          style: text.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          '$greeting · ${_today()}',
+                          style: text.bodySmall
+                              ?.copyWith(color: colors.outline),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.l),
+
+          // ---- Action-required banner ----
+          if ((_pending ?? 0) > 0)
+            _Reveal(
+              delayMs: 40,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: AppSpacing.l),
+                padding: const EdgeInsets.all(AppSpacing.m),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEF6C00).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(
+                      color: const Color(0xFFEF6C00).withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.priority_high_rounded,
+                        color: Color(0xFFEF6C00), size: 20),
+                    const SizedBox(width: AppSpacing.s),
+                    Expanded(
+                      child: Text(
+                        '$_pending application${_pending == 1 ? '' : 's'} '
+                        'awaiting review',
+                        style: text.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFFEF6C00)),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => _open(const AdminPanelPage()),
+                      child: const Text('Review'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // ---- Key metrics ----
+          _Reveal(
+            delayMs: 60,
+            child: Text('KEY METRICS', style: _adminLabel(context)),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          _Reveal(
+            delayMs: 90,
+            child: Row(
+              children: [
+                _AdminStat(
+                  label: 'Registered users',
+                  value: _users?.toString() ?? '—',
+                  icon: Icons.people_outline,
+                  onTap: () => _open(const AdminPanelPage()),
+                ),
+                const SizedBox(width: AppSpacing.m),
+                _AdminStat(
+                  label: 'Feedback received',
+                  value: _feedback?.toString() ?? '—',
+                  icon: Icons.forum_outlined,
+                  onTap: () => _open(const AnalyticsDashboardPage()),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          _Reveal(
+            delayMs: 120,
+            child: Row(
+              children: [
+                _AdminStat(
+                  label: 'Pending review',
+                  value: _pending?.toString() ?? '—',
+                  icon: Icons.pending_actions_outlined,
+                  highlight: (_pending ?? 0) > 0,
+                  onTap: () => _open(const AdminPanelPage()),
+                ),
+                const SizedBox(width: AppSpacing.m),
+                _AdminStat(
+                  label: 'NLP model report',
+                  value: 'View',
+                  icon: Icons.science_outlined,
+                  onTap: () => _open(const SentimentEvalPage()),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xxl),
+
+          // ---- Modules ----
+          _Reveal(
+            delayMs: 160,
+            child: Text('SYSTEM MODULES', style: _adminLabel(context)),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          _Reveal(
+            delayMs: 190,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: Column(
+                children: [
+                  _ModuleRow(
+                    icon: Icons.dashboard_outlined,
+                    title: 'Administration',
+                    subtitle: 'Applications · announcements · user records',
+                    onTap: () => _open(const AdminPanelPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _ModuleRow(
+                    icon: Icons.insights_outlined,
+                    title: 'Sentiment analytics',
+                    subtitle: 'Visitor feedback classified by NLP',
+                    onTap: () => _open(const AnalyticsDashboardPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _ModuleRow(
+                    icon: Icons.campaign_outlined,
+                    title: 'Public announcements',
+                    subtitle: 'Publish advisories to all app users',
+                    onTap: () => _open(const AnnouncementsPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _ModuleRow(
+                    icon: Icons.verified_outlined,
+                    title: 'Business accreditation',
+                    subtitle: 'Tourism establishment compliance',
+                    onTap: () => _open(const AccreditationPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _ModuleRow(
+                    icon: Icons.emergency_outlined,
+                    title: 'Emergency directory',
+                    subtitle: 'City hotlines and rescue services',
+                    color: const Color(0xFFD32F2F),
+                    onTap: () => _open(const EmergencyPage()),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+
+          // ---- Footer ----
+          Center(
+            child: Text(
+              'Be@Mandaluyong · Administration Console',
+              style: text.labelSmall?.copyWith(color: colors.outline),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Small uppercase section label used across the admin console.
+TextStyle? _adminLabel(BuildContext context) =>
+    Theme.of(context).textTheme.labelSmall?.copyWith(
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.0,
+          color: Theme.of(context).colorScheme.outline,
+        );
+
+/// Today's date, e.g. "6 August 2026".
+String _today() {
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  final d = DateTime.now();
+  return '${d.day} ${months[d.month - 1]} ${d.year}';
+}
+
+/// A metric card in the admin console — flat, bordered, data-first.
+class _AdminStat extends StatelessWidget {
+  const _AdminStat({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.highlight = false,
+    this.onTap,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool highlight;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final accent = highlight ? const Color(0xFFEF6C00) : colors.primary;
+
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            border: Border.all(
+              color: highlight
+                  ? accent.withValues(alpha: 0.55)
+                  : colors.outlineVariant,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: accent, size: 18),
+                  const Spacer(),
+                  Icon(Icons.north_east_rounded,
+                      size: 13, color: colors.outlineVariant),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.m),
+              Text(value,
+                  style: text.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      height: 1.0,
+                      color: highlight ? accent : colors.onSurface)),
+              const SizedBox(height: 4),
+              Text(label.toUpperCase(),
+                  style: text.labelSmall?.copyWith(
+                    color: colors.outline,
+                    letterSpacing: 0.5,
+                    fontWeight: FontWeight.w600,
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A row in the "System modules" list.
+class _ModuleRow extends StatelessWidget {
+  const _ModuleRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.color,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final accent = color ?? colors.primary;
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.l, vertical: AppSpacing.m),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: accent.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+              ),
+              child: Icon(icon, size: 19, color: accent),
+            ),
+            const SizedBox(width: AppSpacing.m),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: text.bodyLarge
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  Text(subtitle,
+                      style: text.bodySmall
+                          ?.copyWith(color: colors.outline)),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: colors.outlineVariant),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Quiet, consistent section label used across the home screen.
+TextStyle? _sectionStyle(BuildContext context) =>
+    Theme.of(context).textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+
+/// Minimal weather readout for the home header (plain text, no chrome).
+class _HomeWeather extends StatefulWidget {
+  const _HomeWeather();
+
+  @override
+  State<_HomeWeather> createState() => _HomeWeatherState();
+}
+
+class _HomeWeatherState extends State<_HomeWeather> {
+  Weather? _weather;
+
+  @override
+  void initState() {
+    super.initState();
+    WeatherService.fetch().then((w) {
+      if (mounted) setState(() => _weather = w);
+    }).catchError((_) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final w = _weather;
+    if (w == null) return const SizedBox.shrink();
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(w.icon, size: 18, color: colors.outline),
+        const SizedBox(width: 6),
+        Text(
+          '${w.tempC.round()}°',
+          style: text.titleMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: colors.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Spotlight card nudging tourists toward a ready-made day plan.
+class _ItinerarySpotlightCard extends StatelessWidget {
+  const _ItinerarySpotlightCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      color: colors.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg)),
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ItineraryPage()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: colors.primary.withValues(alpha: 0.08),
+                ),
+                child: Icon(Icons.route_rounded,
+                    color: colors.primary, size: 26),
+              ),
+              const SizedBox(width: AppSpacing.l),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'First time in Mandaluyong?',
+                      style:
+                          text.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Follow a ready-made half-day or full-day plan',
+                      style: text.bodySmall?.copyWith(color: colors.outline),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s),
+              Icon(Icons.chevron_right, color: colors.outline),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Spotlight card that opens the Mayor's official Facebook updates.
+class _MayorSpotlightCard extends StatelessWidget {
+  const _MayorSpotlightCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      color: colors.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg)),
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const AnnouncementsPage()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: colors.primary.withValues(alpha: 0.08),
+                ),
+                child: Icon(Icons.campaign_rounded,
+                    color: colors.primary, size: 26),
+              ),
+              const SizedBox(width: AppSpacing.l),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Office of the City Mayor',
+                      style:
+                          text.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Official announcements, advisories and city updates',
+                      style: text.bodySmall?.copyWith(color: colors.outline),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s),
+              Icon(Icons.chevron_right, color: colors.outline),
+            ],
+          ),
+        ),
       ),
     );
   }

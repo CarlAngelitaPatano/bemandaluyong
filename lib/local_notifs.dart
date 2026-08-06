@@ -40,6 +40,35 @@ class LocalNotifs {
     }
   }
 
+  /// Shows a notification immediately — used when the app finds a new
+  /// official city announcement.
+  static Future<void> showNow({
+    required String title,
+    required String body,
+  }) async {
+    if (!_ready) return;
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'city_announcements',
+        'City announcements',
+        channelDescription:
+            'Official announcements and advisories from the city government.',
+        importance: Importance.high,
+        priority: Priority.high,
+      ),
+    );
+    try {
+      await _plugin.show(
+        id: DateTime.now().millisecondsSinceEpoch.remainder(100000),
+        title: title,
+        body: body,
+        notificationDetails: details,
+      );
+    } catch (_) {
+      // Never let a notification failure affect the app.
+    }
+  }
+
   /// Next 7:00 AM (today if it's still before 7, otherwise tomorrow).
   static tz.TZDateTime _next7am() {
     final now = tz.TZDateTime.now(tz.local);

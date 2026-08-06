@@ -9,7 +9,9 @@ import 'attractions.dart'; // kAttractions
 import 'theme.dart';
 
 // Distinct color for tourist-attraction pins (churches use the brand colors).
-const Color _attractionColor = Color(0xFFEF6C00); // deep orange
+// Attractions use the seal's gold so the map stays on the app's
+// navy + gold system (churches are navy).
+const Color _attractionColor = AppTheme.brandGold;
 
 // ===========================================================================
 // Mandaluyong Map — heritage churches AND major tourist attractions as pins on
@@ -208,7 +210,7 @@ class _MeDot extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.blue,
+        color: AppTheme.brandBlue,
         shape: BoxShape.circle,
         border: Border.all(color: Colors.white, width: 3),
         boxShadow: [
