@@ -615,7 +615,6 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final success = AppTheme.successFor(Theme.of(context).brightness);
 
     final visited = TrailProgress.visited.length;
     final total = kChurches.length;

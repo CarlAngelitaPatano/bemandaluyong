@@ -1028,7 +1028,6 @@ class _BadgeTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final success = AppTheme.successFor(Theme.of(context).brightness);
     return GestureDetector(
       onTap: () => ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
