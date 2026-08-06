@@ -205,8 +205,9 @@ class EmergencyPage extends StatelessWidget {
                   onTap: () => _call(context, kHotlines[i]),
                   leading: CircleAvatar(
                     backgroundColor:
-                        kHotlines[i].color.withValues(alpha: 0.15),
-                    child: Icon(kHotlines[i].icon, color: kHotlines[i].color),
+                        const Color(0xFFD32F2F).withValues(alpha: 0.10),
+                    child: Icon(kHotlines[i].icon,
+                        color: const Color(0xFFD32F2F)),
                   ),
                   title: Text(
                     kHotlines[i].name,
@@ -220,7 +221,7 @@ class EmergencyPage extends StatelessWidget {
                       Text(
                         kHotlines[i].display,
                         style: text.bodyMedium?.copyWith(
-                          color: kHotlines[i].color,
+                          color: const Color(0xFFD32F2F),
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -229,7 +230,7 @@ class EmergencyPage extends StatelessWidget {
                     ],
                   ),
                   isThreeLine: true,
-                  trailing: Icon(Icons.call, color: kHotlines[i].color),
+                  trailing: const Icon(Icons.call, color: Color(0xFFD32F2F)),
                 ),
               ),
             ),

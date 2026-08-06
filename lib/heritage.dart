@@ -737,6 +737,7 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
                 value: v,
                 minHeight: 10,
                 backgroundColor: colors.surfaceContainerHighest,
+                color: AppTheme.brandGold, // gold = achievement
               ),
             ),
           ),
@@ -785,16 +786,20 @@ class _CompletionBanner extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [colors.primary, colors.tertiary],
+        // Navy field with a gold trophy — the certificate look.
+        gradient: const LinearGradient(
+          colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
         borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+            color: AppTheme.brandGold.withValues(alpha: 0.6), width: 1.5),
       ),
       child: Column(
         children: [
-          const Icon(Icons.emoji_events, color: Colors.amber, size: 44),
+          const Icon(Icons.emoji_events,
+              color: AppTheme.brandGold, size: 44),
           const SizedBox(height: 8),
           Text(
             'Trail Complete!',
@@ -814,8 +819,8 @@ class _CompletionBanner extends StatelessWidget {
           FilledButton.icon(
             onPressed: onClaim,
             style: FilledButton.styleFrom(
-              backgroundColor: Colors.white,
-              foregroundColor: colors.primary,
+              backgroundColor: AppTheme.brandGold,
+              foregroundColor: const Color(0xFF12305F),
             ),
             icon: const Icon(Icons.workspace_premium),
             label: const Text('Claim your certificate'),
@@ -843,7 +848,8 @@ class _TrailStop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    final success = AppTheme.successFor(Theme.of(context).brightness);
+    // Verified stops are an achievement — gold, matching the trail system.
+    const success = AppTheme.brandGold;
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -855,7 +861,8 @@ class _TrailStop extends StatelessWidget {
                 radius: 18,
                 backgroundColor: verified ? success : colors.primary,
                 child: verified
-                    ? const Icon(Icons.check, color: Colors.white, size: 20)
+                    ? const Icon(Icons.check,
+                        color: Color(0xFF12305F), size: 20)
                     : Text(
                         '$index',
                         style: TextStyle(

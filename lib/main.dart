@@ -27,6 +27,7 @@ import 'avatars.dart'; // built-in avatar option
 import 'user_role.dart'; // Tourist / Mandaleño
 import 'emergency.dart'; // emergency hotlines
 import 'mayor_updates.dart'; // Mayor's Updates
+import 'itinerary.dart'; // suggested itineraries
 
 void main() async {
   // Required before any async work in main().
@@ -115,6 +116,7 @@ class _HomeShellState extends State<HomeShell> {
   static const List<Widget> _pages = <Widget>[
     HomePage(),
     HeritageChurchesView(),
+    ServicesGridPage(),
     ProfilePage(),
   ];
 
@@ -183,7 +185,7 @@ class _HomeShellState extends State<HomeShell> {
         leadingWidth: 60,
         leading: Center(
           child: GestureDetector(
-            onTap: () => _onTab(2), // jump to the Profile tab
+            onTap: () => _onTab(3), // jump to the Profile tab
             child: Container(
               margin: const EdgeInsets.only(left: 12),
               padding: const EdgeInsets.all(2),
@@ -242,6 +244,7 @@ class _HomeShellState extends State<HomeShell> {
         destinations: const [
           NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.explore_outlined), selectedIcon: Icon(Icons.explore), label: 'Explore'),
+          NavigationDestination(icon: Icon(Icons.grid_view_outlined), selectedIcon: Icon(Icons.grid_view_rounded), label: 'Services'),
           NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
         ],
       ),
@@ -266,71 +269,30 @@ class HomePage extends StatelessWidget {
         ? 'Good morning'
         : (hour < 18 ? 'Good afternoon' : 'Good evening');
 
-    // Home feature cards, grouped into two sections. Each feature has its own
-    // color identity (gradient) for a modern, professional look.
-    final explore = <_Feature>[
-      _Feature('Map', Icons.map_rounded,
-          color: const Color(0xFF1E88E5), // blue
-          page: (_) => const TrailMapPage()),
-      _Feature('Attractions', Icons.photo_camera_rounded,
-          color: const Color(0xFFF4511E), // deep orange
-          page: (_) => const AttractionsPage()),
-      _Feature('Homegrown', Icons.storefront_rounded,
-          color: const Color(0xFF8E24AA), // purple
-          page: (_) => const DiningPage()),
-      _Feature('3D / AR', Icons.view_in_ar_rounded,
-          color: const Color(0xFF00897B), // teal
-          page: (_) => const ArIntroPage()),
-    ];
-    final cityServices = <_Feature>[
-      _Feature("Mayor's Updates", Icons.campaign_rounded,
-          color: const Color(0xFF00838F), // teal-cyan
-          page: (_) => const MayorUpdatesPage()),
-      _Feature('News', Icons.newspaper_rounded,
-          color: const Color(0xFF3949AB), // indigo
-          page: (_) => const NewsPage()),
-      _Feature('Events', Icons.event_rounded,
-          color: const Color(0xFFE53935), // red
-          page: (_) => const EventsPage()),
-      _Feature('Services', Icons.widgets_rounded,
-          color: const Color(0xFF43A047), // green
-          page: (_) => const ServicesPage()),
-      _Feature('Contact', Icons.support_agent_rounded,
-          color: const Color(0xFFFB8C00), // amber-orange
-          page: (_) => const ReportConcernPage()),
-      _Feature('Emergency', Icons.emergency_rounded,
-          color: const Color(0xFFD32F2F), // emergency red
-          page: (_) => const EmergencyPage()),
-    ];
-
-    // Tourists explore first; Mandaleños get city services first.
+    // Tourist or Mandaleño — decides the greeting and the "For you" card.
+    // (All feature tiles live in the Services tab.)
     final role = UserRoleStore.current;
-    final primaryFeatures =
-        role == UserRole.mandaleno ? cityServices : explore;
-    final secondaryFeatures =
-        role == UserRole.mandaleno ? explore : cityServices;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(AppSpacing.l),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Welcome banner
+          // ---- Welcome banner: deep navy with a gold signature ----
           Container(
-            padding: const EdgeInsets.all(AppSpacing.xxl),
+            padding: const EdgeInsets.all(AppSpacing.xl),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [colors.primary, colors.primaryContainer],
+              gradient: const LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
+                colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
               ),
               borderRadius: BorderRadius.circular(AppRadius.xl),
-              // Soft glow lifts the banner off the background.
               boxShadow: [
                 BoxShadow(
-                  color: colors.primary.withValues(alpha: 0.35),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
+                  color: const Color(0xFF12305F).withValues(alpha: 0.22),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
                 ),
               ],
             ),
@@ -338,215 +300,118 @@ class HomePage extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Expanded(
                       child: Text(
                         // Mandaleños are greeted as locals; tourists by name.
                         role == UserRole.mandaleno
-                            ? '$greeting, Mandaleño!'
+                            ? '$greeting, Mandaleño'
                             : (firstName == null
                                 ? greeting
                                 : '$greeting, $firstName'),
-                        style: text.titleMedium?.copyWith(
-                          color: colors.onPrimary.withValues(alpha: 0.95),
+                        style: text.bodyMedium?.copyWith(
+                          color: Colors.white.withValues(alpha: 0.75),
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ),
                     const WeatherChip(),
                   ],
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: AppSpacing.s),
+                // Brand name in the heritage serif.
                 Text(
                   'Be@Mandaluyong',
-                  style: text.headlineSmall?.copyWith(color: colors.onPrimary),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  // The welcome line speaks to who they are.
-                  role == UserRole.mandaleno
-                      ? 'Your city at your fingertips — services, news, and '
-                          'the heritage you call home.'
-                      : 'Explore the heritage, culture, and services of '
-                          'Mandaluyong City.',
-                  style: text.bodyMedium?.copyWith(
-                    color: colors.onPrimary.withValues(alpha: 0.9),
+                  style: AppTheme.brandTextStyle(
+                    fontSize: 30,
+                    color: Colors.white,
                   ),
                 ),
                 const SizedBox(height: AppSpacing.m),
-                // Role badge — Tourist or Mandaleño.
+                // Gold signature rule — the seal's accent, used once.
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 5),
+                  width: 44,
+                  height: 3,
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.22),
-                    borderRadius: BorderRadius.circular(999),
+                    color: AppTheme.brandGold,
+                    borderRadius: BorderRadius.circular(99),
                   ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(role.icon, size: 14, color: colors.onPrimary),
-                      const SizedBox(width: 6),
-                      Text(
-                        role.label,
-                        style: text.labelMedium?.copyWith(
-                          color: colors.onPrimary,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ],
+                ),
+                const SizedBox(height: AppSpacing.m),
+                // A line that changes with the time of day and the role.
+                Text(
+                  _headline(role, hour),
+                  style: text.bodyMedium?.copyWith(
+                    color: Colors.white.withValues(alpha: 0.9),
+                    height: 1.4,
                   ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: AppSpacing.m),
-          // Always one tap from help — for Tourists and Mandaleños alike.
+          const SizedBox(height: AppSpacing.l),
+
+          // Slim emergency link — present, but not shouting.
           _Reveal(
             delayMs: 30,
-            child: Material(
-              color: const Color(0xFFD32F2F).withValues(alpha: 0.10),
-              borderRadius: BorderRadius.circular(AppRadius.lg),
-              child: InkWell(
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const EmergencyPage()),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(AppRadius.md),
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const EmergencyPage()),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: AppSpacing.m, vertical: AppSpacing.s),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(
+                      color: const Color(0xFFD32F2F).withValues(alpha: 0.35)),
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: AppSpacing.l, vertical: AppSpacing.m),
-                  child: Row(
-                    children: [
-                      const CircleAvatar(
-                        radius: 18,
-                        backgroundColor: Color(0xFFD32F2F),
-                        child: Icon(Icons.emergency_rounded,
-                            color: Colors.white, size: 20),
-                      ),
-                      const SizedBox(width: AppSpacing.m),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Emergency hotlines',
-                              style: text.titleSmall?.copyWith(
-                                fontWeight: FontWeight.w700,
-                                color: const Color(0xFFD32F2F),
-                              ),
-                            ),
-                            Text(
-                              'Call 911, rescue, police, fire or hospital',
-                              style: text.bodySmall,
-                            ),
-                          ],
+                child: Row(
+                  children: [
+                    const Icon(Icons.emergency_outlined,
+                        size: 18, color: Color(0xFFD32F2F)),
+                    const SizedBox(width: AppSpacing.s),
+                    Expanded(
+                      child: Text(
+                        'Emergency hotlines',
+                        style: text.bodyMedium?.copyWith(
+                          color: const Color(0xFFD32F2F),
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const Icon(Icons.chevron_right,
-                          color: Color(0xFFD32F2F)),
-                    ],
-                  ),
+                    ),
+                    const Icon(Icons.chevron_right,
+                        size: 18, color: Color(0xFFD32F2F)),
+                  ],
                 ),
               ),
             ),
           ),
+          // ---- 1. The app's flagship: trail progress ----
           const SizedBox(height: AppSpacing.xl),
           const _Reveal(delayMs: 60, child: _TrailProgressCard()),
+
+          // ---- 2. For you: two contextual cards under one label ----
           const SizedBox(height: AppSpacing.xxl),
           _Reveal(
-              delayMs: 160,
-              child: Text('Featured today', style: text.titleMedium)),
+              delayMs: 140,
+              child: Text('For you', style: _sectionStyle(context))),
           const SizedBox(height: AppSpacing.m),
-          const _Reveal(delayMs: 200, child: _FeaturedTodayCard()),
-          const SizedBox(height: AppSpacing.xxl),
-          _Reveal(
-              delayMs: 230,
-              child: Text("From the Mayor", style: text.titleMedium)),
-          const SizedBox(height: AppSpacing.m),
-          const _Reveal(delayMs: 250, child: _MayorSpotlightCard()),
-          // Section order follows the user's role: Tourists see "Explore"
-          // first, Mandaleños see "City & services" first.
-          const SizedBox(height: AppSpacing.xxl),
-          _Reveal(
-              delayMs: 280,
-              child:
-                  Text(role.primarySectionTitle, style: text.titleMedium)),
+          const _Reveal(delayMs: 180, child: _FeaturedTodayCard()),
           const SizedBox(height: AppSpacing.m),
           _Reveal(
-            delayMs: 320,
-            child: GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: AppSpacing.m,
-              crossAxisSpacing: AppSpacing.m,
-              childAspectRatio: 1.3,
-              children:
-                  primaryFeatures.map((f) => _FeatureCard(feature: f)).toList(),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xxl),
-          _Reveal(
-              delayMs: 400,
-              child:
-                  Text(role.secondarySectionTitle, style: text.titleMedium)),
-          const SizedBox(height: AppSpacing.m),
-          _Reveal(
-            delayMs: 440,
-            child: GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: AppSpacing.m,
-              crossAxisSpacing: AppSpacing.m,
-              childAspectRatio: 1.3,
-              children: secondaryFeatures
-                  .map((f) => _FeatureCard(feature: f))
-                  .toList(),
-            ),
+            delayMs: 220,
+            child: role == UserRole.tourist
+                ? const _ItinerarySpotlightCard()
+                : const _MayorSpotlightCard(),
           ),
 
-          // ---- Heritage Churches section ----
-          const SizedBox(height: AppSpacing.xxl),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text('Heritage Churches', style: text.titleMedium),
-              TextButton(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      appBar: AppBar(title: const Text('Heritage Churches')),
-                      body: const HeritageChurchesView(),
-                    ),
-                  ),
-                ),
-                child: const Text('See all'),
-              ),
-            ],
-          ),
-          const SizedBox(height: 4),
-          // Horizontal scroller of featured churches
-          SizedBox(
-            height: 190,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: kChurches.length,
-              separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.m),
-              itemBuilder: (_, i) => FeaturedChurchCard(church: kChurches[i]),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.l),
-          // Trail button
-          FilledButton.icon(
-            onPressed: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const HeritageTrailPage()),
-            ),
-            icon: const Icon(Icons.map_outlined),
-            label: const Text('View the Heritage Church Trail'),
-          ),
+          // (All the feature tiles now live in the "Services" tab, keeping
+          // this dashboard calm and scannable.)
+          const SizedBox(height: AppSpacing.xl),
         ],
       ),
     );
@@ -584,7 +449,8 @@ class _FeatureCardState extends State<_FeatureCard> {
       curve: Curves.easeOut,
       child: Card(
       elevation: 0,
-      color: colors.surfaceContainerHighest,
+      color: Colors.transparent,
+      margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(AppRadius.md)),
       child: InkWell(
@@ -609,36 +475,25 @@ class _FeatureCardState extends State<_FeatureCard> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // Squircle with a soft gradient + glow in the feature's color.
+              // One calm accent for every feature — no rainbow.
               Container(
-                width: 56,
-                height: 56,
+                width: 52,
+                height: 52,
                 decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [
-                      feature.color.withValues(alpha: 0.85),
-                      feature.color,
-                    ],
-                  ),
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: feature.color.withValues(alpha: 0.4),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  color: colors.primary.withValues(alpha: 0.08),
+                  shape: BoxShape.circle,
                 ),
-                child: Icon(feature.icon, size: 28, color: Colors.white),
+                child: Icon(feature.icon, size: 24, color: colors.primary),
               ),
-              const SizedBox(height: AppSpacing.m),
+              const SizedBox(height: AppSpacing.s),
               Text(
                 feature.label,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
                 style: Theme.of(context)
                     .textTheme
-                    .titleSmall
+                    .bodyMedium
                     ?.copyWith(fontWeight: FontWeight.w600),
               ),
             ],
@@ -777,7 +632,8 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
                 value: v,
                 minHeight: 10,
                 backgroundColor: colors.surfaceContainerHighest,
-                color: complete ? success : colors.primary,
+                // Gold = progress/achievement in the two-colour system.
+                color: AppTheme.brandGold,
               ),
             ),
           ),
@@ -837,6 +693,253 @@ class _RevealState extends State<_Reveal> {
   }
 }
 
+// ===========================================================================
+// Services tab — every feature in one clean, grouped grid. Section order
+// follows the user's role (Mandaleños see city services first).
+// ===========================================================================
+class ServicesGridPage extends StatelessWidget {
+  const ServicesGridPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    final explore = <_Feature>[
+      _Feature('Itineraries', Icons.route_rounded,
+          color: const Color(0xFF6D4C41), page: (_) => const ItineraryPage()),
+      _Feature('Map', Icons.map_rounded,
+          color: const Color(0xFF1E88E5), page: (_) => const TrailMapPage()),
+      _Feature('Attractions', Icons.photo_camera_rounded,
+          color: const Color(0xFFF4511E),
+          page: (_) => const AttractionsPage()),
+      _Feature('Homegrown', Icons.storefront_rounded,
+          color: const Color(0xFF8E24AA), page: (_) => const DiningPage()),
+      _Feature('3D / AR', Icons.view_in_ar_rounded,
+          color: const Color(0xFF00897B), page: (_) => const ArIntroPage()),
+    ];
+    final cityServices = <_Feature>[
+      _Feature("Mayor's Updates", Icons.campaign_rounded,
+          color: const Color(0xFF00838F),
+          page: (_) => const MayorUpdatesPage()),
+      _Feature('News', Icons.newspaper_rounded,
+          color: const Color(0xFF3949AB), page: (_) => const NewsPage()),
+      _Feature('Events', Icons.event_rounded,
+          color: const Color(0xFFE53935), page: (_) => const EventsPage()),
+      _Feature('Services', Icons.widgets_rounded,
+          color: const Color(0xFF43A047), page: (_) => const ServicesPage()),
+      _Feature('Contact', Icons.support_agent_rounded,
+          color: const Color(0xFFFB8C00),
+          page: (_) => const ReportConcernPage()),
+    ];
+
+    final role = UserRoleStore.current;
+    final first = role == UserRole.mandaleno ? cityServices : explore;
+    final second = role == UserRole.mandaleno ? explore : cityServices;
+    final firstTitle = role.primarySectionTitle;
+    final secondTitle = role.secondarySectionTitle;
+
+    Widget grid(List<_Feature> items, int delay) => _Reveal(
+          delayMs: delay,
+          child: GridView.count(
+            crossAxisCount: 3,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            mainAxisSpacing: AppSpacing.s,
+            crossAxisSpacing: AppSpacing.s,
+            childAspectRatio: 0.95,
+            children: items.map((f) => _FeatureCard(feature: f)).toList(),
+          ),
+        );
+
+    return ListView(
+      padding: const EdgeInsets.all(AppSpacing.l),
+      children: [
+        _Reveal(
+          delayMs: 0,
+          child: Text('All features',
+              style: text.headlineSmall
+                  ?.copyWith(fontWeight: FontWeight.w700)),
+        ),
+        const SizedBox(height: 2),
+        _Reveal(
+          delayMs: 40,
+          child: Text(
+            'Everything Be@Mandaluyong can do, in one place.',
+            style: text.bodyMedium?.copyWith(color: colors.outline),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xl),
+        _Reveal(delayMs: 80, child: Text(firstTitle, style: _sectionStyle(context))),
+        const SizedBox(height: AppSpacing.m),
+        grid(first, 120),
+        const SizedBox(height: AppSpacing.xxl),
+        _Reveal(
+            delayMs: 200, child: Text(secondTitle, style: _sectionStyle(context))),
+        const SizedBox(height: AppSpacing.m),
+        grid(second, 240),
+        const SizedBox(height: AppSpacing.xl),
+        // Emergency is always reachable from here too.
+        _Reveal(
+          delayMs: 300,
+          child: OutlinedButton.icon(
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const EmergencyPage()),
+            ),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: const Color(0xFFD32F2F),
+              side: BorderSide(
+                  color: const Color(0xFFD32F2F).withValues(alpha: 0.5)),
+              padding: const EdgeInsets.symmetric(vertical: AppSpacing.m),
+            ),
+            icon: const Icon(Icons.emergency_outlined),
+            label: const Text('Emergency hotlines'),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A warm headline that changes with the time of day and who's reading it.
+/// Keeps the dashboard feeling alive without leaning on emoji.
+String _headline(UserRole role, int hour) {
+  final morning = hour < 12;
+  final afternoon = hour >= 12 && hour < 18;
+
+  if (role == UserRole.mandaleno) {
+    if (morning) {
+      return 'Your city is awake — services, news, and events for today.';
+    }
+    if (afternoon) {
+      return 'City services, news, and events, all in one place.';
+    }
+    return 'Catch up on today\'s news and updates from the city.';
+  }
+  if (morning) {
+    return 'A perfect morning to explore the heritage and culture of '
+        'Mandaluyong City.';
+  }
+  if (afternoon) {
+    return 'The city is waiting — heritage, food, and places to discover.';
+  }
+  return 'Explore the heritage, culture, and services of Mandaluyong City.';
+}
+
+/// Quiet, consistent section label used across the home screen.
+TextStyle? _sectionStyle(BuildContext context) =>
+    Theme.of(context).textTheme.titleSmall?.copyWith(
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        );
+
+/// Minimal weather readout for the home header (plain text, no chrome).
+class _HomeWeather extends StatefulWidget {
+  const _HomeWeather();
+
+  @override
+  State<_HomeWeather> createState() => _HomeWeatherState();
+}
+
+class _HomeWeatherState extends State<_HomeWeather> {
+  Weather? _weather;
+
+  @override
+  void initState() {
+    super.initState();
+    WeatherService.fetch().then((w) {
+      if (mounted) setState(() => _weather = w);
+    }).catchError((_) {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final w = _weather;
+    if (w == null) return const SizedBox.shrink();
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(w.icon, size: 18, color: colors.outline),
+        const SizedBox(width: 6),
+        Text(
+          '${w.tempC.round()}°',
+          style: text.titleMedium?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: colors.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Spotlight card nudging tourists toward a ready-made day plan.
+class _ItinerarySpotlightCard extends StatelessWidget {
+  const _ItinerarySpotlightCard();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      elevation: 0,
+      color: colors.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadius.lg)),
+      child: InkWell(
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ItineraryPage()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          child: Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: colors.primary.withValues(alpha: 0.08),
+                ),
+                child: Icon(Icons.route_rounded,
+                    color: colors.primary, size: 26),
+              ),
+              const SizedBox(width: AppSpacing.l),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'First time in Mandaluyong?',
+                      style:
+                          text.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Follow a ready-made half-day or full-day plan',
+                      style: text.bodySmall?.copyWith(color: colors.outline),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: AppSpacing.s),
+              Icon(Icons.chevron_right, color: colors.outline),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Spotlight card that opens the Mayor's official Facebook updates.
 class _MayorSpotlightCard extends StatelessWidget {
   const _MayorSpotlightCard();
@@ -864,16 +967,12 @@ class _MayorSpotlightCard extends StatelessWidget {
               Container(
                 width: 52,
                 height: 52,
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFF1877F2), Color(0xFF0A4DA2)],
-                  ),
+                  color: colors.primary.withValues(alpha: 0.08),
                 ),
-                child: const Icon(Icons.campaign_rounded,
-                    color: Colors.white, size: 26),
+                child: Icon(Icons.campaign_rounded,
+                    color: colors.primary, size: 26),
               ),
               const SizedBox(width: AppSpacing.l),
               Expanded(

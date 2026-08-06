@@ -41,8 +41,16 @@ class AppTheme {
   AppTheme._();
 
   // --- Brand colors --------------------------------------------------------
-  static const Color brandBlue = Color(0xFF0038A8); // flag blue (seed/primary)
-  static const Color brandGold = Color(0xFFFCD116); // seal sun (accent)
+  // The app runs on a disciplined TWO-colour system drawn from the city seal:
+  //   • Navy  — the workhorse: navigation, actions, feature icons, links.
+  //   • Gold  — the highlight: progress, achievements, heritage moments.
+  // Red appears only for emergencies, so it always reads as urgent.
+  static const Color brandBlue = Color(0xFF12305F); // deep seal navy (primary)
+  static const Color brandGold = Color(0xFFD9A520); // seal gold (accent)
+
+  /// The brighter flag blue — kept for the flag/ring motifs on the welcome
+  /// screen, where the vivid civic colour belongs.
+  static const Color flagBlue = Color(0xFF0038A8);
 
   /// Bold Mandaluyong seal red — identity accent only (logout, branding).
   static const Color cityRed = Color(0xFFCE1126);

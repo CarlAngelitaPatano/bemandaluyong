@@ -533,7 +533,8 @@ class _ProfilePageState extends State<ProfilePage> {
                       value: v,
                       minHeight: 10,
                       backgroundColor: colors.surfaceContainerHighest,
-                      color: completed ? success : colors.primary,
+                      // Gold = progress/achievement.
+                      color: AppTheme.brandGold,
                     ),
                   ),
                 ),
@@ -1002,12 +1003,13 @@ class _BadgeTile extends StatelessWidget {
                         earned ? colors.onTertiaryContainer : colors.outline,
                   ),
                 ),
-                // Green check when the challenge is complete.
+                // Gold check when the challenge is complete (achievement).
                 if (earned)
                   CircleAvatar(
                     radius: 9,
                     backgroundColor: colors.surface,
-                    child: Icon(Icons.check_circle, size: 16, color: success),
+                    child: const Icon(Icons.check_circle,
+                        size: 16, color: AppTheme.brandGold),
                   ),
               ],
             ),
