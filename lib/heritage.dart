@@ -16,6 +16,8 @@ import 'city_content.dart'; // for the shared LeadingThumb widget
 import 'theme.dart'; // design tokens (AppTheme.success, AppSpacing, AppRadius)
 import 'achievements.dart'; // trail badges + unlock celebration
 import 'motion.dart'; // Reveal / PopIn animations
+import 'cloud_sync.dart'; // shared account progress (app ↔ website)
+import 'user_role.dart'; // Tourist / Mandaleño
 
 /// A heritage church in Mandaluyong.
 class Church {
@@ -629,18 +631,53 @@ class TrailProgress {
     await prefs.setString(_proofsKey, jsonEncode(proofs));
   }
 
+  /// Merges this device's progress with the account's progress in the shared
+  /// database, so the trail is the same on the app and the website.
+  /// Call after login (and at startup for a remembered session).
+  static Future<void> syncWithCloud() async {
+    // Pull anything verified on another platform (e.g. the website).
+    final remote = await CloudSync.fetchVisited();
+    if (remote != null && remote.isNotEmpty) {
+      final before = visited.length;
+      visited.addAll(remote); // union — nothing is ever lost
+      if (visited.length != before) await _save();
+    }
+    // Push this device's progress up.
+    await CloudSync.pushProgress(
+      visited: visited,
+      totalChurches: kChurches.length,
+      userType: UserRoleStore.current.label,
+    );
+  }
+
   /// Marks a church verified once the required photo proof is provided,
-  /// and saves it so it survives app restarts.
+  /// saves it locally, and syncs it to the shared account.
   static Future<void> markVerified(Church c, List<String> photoPaths) async {
     proofs[c.name] = photoPaths;
     visited.add(c.name);
     await _save();
+    // Make the new stop visible on the website too.
+    await CloudSync.pushProgress(
+      visited: visited,
+      totalChurches: kChurches.length,
+      userType: UserRoleStore.current.label,
+    );
   }
 
+  /// Pushes the current progress to the shared account (app ↔ website).
+  static Future<void> pushToCloud() => CloudSync.pushProgress(
+        visited: visited,
+        totalChurches: kChurches.length,
+        userType: UserRoleStore.current.label,
+      );
+
   /// Unlocks the entire trail in memory (used by the demo account). Not saved
-  /// to storage, so it only lasts for the current session.
-  static void unlockAll() {
+  /// to device storage, so it only lasts for the current session — but it IS
+  /// pushed to the shared database so the demo also looks complete when the
+  /// same account is opened on the website.
+  static Future<void> unlockAll() async {
     visited.addAll(kChurches.map((c) => c.name));
+    await pushToCloud();
   }
 }
 

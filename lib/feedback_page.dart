@@ -1,0 +1,317 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import 'theme.dart';
+import 'motion.dart';
+import 'user_role.dart';
+import 'sentiment.dart'; // on-device NLP classification
+
+// ===========================================================================
+// Visitor feedback.
+//
+// The mobile app COLLECTS feedback; the CCAT web dashboard CLASSIFIES it
+// (positive / neutral / negative) with NLP and displays it alongside tourism
+// statistics. Both share one Firestore database in the Firebase project
+// `be-mandaluyong-4sight`, which is what makes this a genuinely centralised,
+// cross-platform system.
+//
+// ---------------------------------------------------------------------------
+// SHARED SCHEMA — must match what Emmanuel's website reads.
+// If the website uses different names, change them HERE only.
+// ---------------------------------------------------------------------------
+class FeedbackSchema {
+  FeedbackSchema._();
+
+  /// Firestore collection the website reads from.
+  static const String collection = 'feedback';
+
+  // Field names
+  static const String fMessage = 'message'; // the text the NLP analyses
+  static const String fRating = 'rating'; // 1–5 stars
+  static const String fCategory = 'category'; // what it's about
+  static const String fName = 'name'; // display name (may be 'Anonymous')
+  static const String fEmail = 'email'; // account email, if signed in
+  static const String fUserId = 'userId'; // Firebase uid
+  static const String fUserType = 'userType'; // Tourist | Mandaleño
+  static const String fSource = 'source'; // 'mobile' vs website's 'web'
+  static const String fSentiment = 'sentiment'; // positive|neutral|negative
+  static const String fSentimentScore = 'sentimentScore'; // numeric polarity
+  static const String fCreatedAt = 'createdAt'; // server timestamp
+}
+
+/// What the feedback is about — mirrors CCAT's areas of responsibility.
+const List<String> kFeedbackCategories = [
+  'Heritage sites & churches',
+  'Tourist attractions',
+  'Events & festivals',
+  'City services',
+  'Local businesses & food',
+  'The mobile app',
+  'Other',
+];
+
+class FeedbackPage extends StatefulWidget {
+  const FeedbackPage({super.key});
+
+  @override
+  State<FeedbackPage> createState() => _FeedbackPageState();
+}
+
+class _FeedbackPageState extends State<FeedbackPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _message = TextEditingController();
+  int _rating = 0;
+  String _category = kFeedbackCategories.first;
+  bool _anonymous = false;
+  bool _sending = false;
+
+  @override
+  void dispose() {
+    _message.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_rating == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please give a star rating first.')),
+      );
+      return;
+    }
+
+    setState(() => _sending = true);
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      // ---- NLP: classify the comment before it is stored ----
+      final analysis = SentimentAnalyzer.analyze(_message.text.trim());
+      final sentiment = SentimentAnalyzer.analyzeWithRating(
+          _message.text.trim(), _rating);
+      await FirebaseFirestore.instance
+          .collection(FeedbackSchema.collection)
+          .add({
+        FeedbackSchema.fMessage: _message.text.trim(),
+        FeedbackSchema.fRating: _rating,
+        FeedbackSchema.fCategory: _category,
+        FeedbackSchema.fName: _anonymous
+            ? 'Anonymous'
+            : (user?.displayName ?? 'Anonymous'),
+        FeedbackSchema.fEmail: _anonymous ? '' : (user?.email ?? ''),
+        FeedbackSchema.fUserId: user?.uid ?? '',
+        FeedbackSchema.fUserType: UserRoleStore.current.label,
+        FeedbackSchema.fSource: 'mobile',
+        // Classified on-device by the app's NLP sentiment analyser.
+        FeedbackSchema.fSentiment: sentiment.id,
+        FeedbackSchema.fSentimentScore: analysis.score,
+        FeedbackSchema.fCreatedAt: FieldValue.serverTimestamp(),
+      });
+
+      if (!mounted) return;
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: const Icon(Icons.check_circle_outline,
+              color: AppTheme.brandGold, size: 44),
+          title: const Text('Thank you!'),
+          content: const Text(
+            'Your feedback has been sent to the City Cultural Affairs and '
+            'Tourism office. It helps them improve the city\'s services and '
+            'heritage programs.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Done'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) Navigator.pop(context);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Could not send your feedback. Check your internet connection '
+              'and try again.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  String get _ratingWord => switch (_rating) {
+        1 => 'Poor',
+        2 => 'Fair',
+        3 => 'Good',
+        4 => 'Very good',
+        5 => 'Excellent',
+        _ => 'Tap a star to rate',
+      };
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Share your feedback')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          children: [
+            Reveal(
+              delayMs: 0,
+              child: Text('How was your experience?', style: text.titleLarge),
+            ),
+            const SizedBox(height: 4),
+            Reveal(
+              delayMs: 40,
+              child: Text(
+                'Your feedback goes straight to the City Cultural Affairs and '
+                'Tourism office.',
+                style: text.bodyMedium?.copyWith(color: colors.outline),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xl),
+
+            // ---- Star rating ----
+            Reveal(
+              delayMs: 80,
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      for (int i = 1; i <= 5; i++)
+                        IconButton(
+                          onPressed: () => setState(() => _rating = i),
+                          iconSize: 40,
+                          icon: Icon(
+                            i <= _rating ? Icons.star_rounded : Icons.star_outline_rounded,
+                            color: i <= _rating
+                                ? AppTheme.brandGold
+                                : colors.outlineVariant,
+                          ),
+                        ),
+                    ],
+                  ),
+                  Text(
+                    _ratingWord,
+                    style: text.titleSmall?.copyWith(
+                      color: _rating == 0 ? colors.outline : colors.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: AppSpacing.xl),
+
+            // ---- Category ----
+            Reveal(
+              delayMs: 120,
+              child: DropdownButtonFormField<String>(
+                initialValue: _category,
+                decoration: const InputDecoration(
+                  labelText: 'What is your feedback about?',
+                  prefixIcon: Icon(Icons.category_outlined),
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  for (final c in kFeedbackCategories)
+                    DropdownMenuItem(value: c, child: Text(c)),
+                ],
+                onChanged: (v) => setState(() => _category = v ?? _category),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.l),
+
+            // ---- The comment (this is what the NLP analyses) ----
+            Reveal(
+              delayMs: 160,
+              child: TextFormField(
+                controller: _message,
+                maxLines: 6,
+                maxLength: 600,
+                textCapitalization: TextCapitalization.sentences,
+                decoration: const InputDecoration(
+                  labelText: 'Tell us more',
+                  hintText:
+                      'What did you enjoy? What could the city improve?',
+                  alignLabelWithHint: true,
+                  border: OutlineInputBorder(),
+                ),
+                validator: (v) {
+                  final s = v?.trim() ?? '';
+                  if (s.isEmpty) return 'Please write your feedback';
+                  if (s.length < 10) {
+                    return 'Please write a little more (at least 10 characters)';
+                  }
+                  return null;
+                },
+              ),
+            ),
+
+            // ---- Anonymous option ----
+            Reveal(
+              delayMs: 200,
+              child: CheckboxListTile(
+                value: _anonymous,
+                onChanged: (v) => setState(() => _anonymous = v ?? false),
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Send anonymously'),
+                subtitle: const Text('Your name and email won\'t be included'),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.l),
+
+            Reveal(
+              delayMs: 240,
+              child: FilledButton.icon(
+                onPressed: _sending ? null : _submit,
+                style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: AppSpacing.m),
+                ),
+                icon: _sending
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send_rounded),
+                label: Text(_sending ? 'Sending…' : 'Send feedback'),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.l),
+
+            Card(
+              color: colors.surfaceContainerHighest,
+              child: Padding(
+                padding: const EdgeInsets.all(AppSpacing.l),
+                child: Row(
+                  children: [
+                    Icon(Icons.insights_outlined, color: colors.outline),
+                    const SizedBox(width: AppSpacing.m),
+                    Expanded(
+                      child: Text(
+                        'Feedback sent here is analysed by the CCAT dashboard, '
+                        'which automatically groups comments as positive, '
+                        'neutral or negative to guide city decisions.',
+                        style: text.bodySmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

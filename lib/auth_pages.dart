@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'main.dart'; // for HomeShell (the screen shown after login)
 import 'user_role.dart'; // Tourist / Mandaleño
+import 'admin_panel.dart'; // kAdminEmail (built-in CCAT administrator)
 import 'theme.dart'; // light theme for the auth screens
 import 'phone_signin.dart'; // phone number / SMS sign-in
 import 'heritage.dart'; // TrailProgress (demo unlock)
@@ -495,10 +496,16 @@ class _LoginPageState extends State<LoginPage> {
       );
       await cred.user?.reload();
       final user = FirebaseAuth.instance.currentUser;
-      final isDemo = user?.email?.toLowerCase() == kDemoEmail;
+      final email = user?.email?.toLowerCase();
+      final isDemo = email == kDemoEmail;
+      // The built-in CCAT administrator is also exempt (demo/presentation).
+      final isBuiltInStaff = email == kAdminEmail;
 
-      // Block sign-in until the email is verified (the demo account is exempt).
-      if (user != null && !user.emailVerified && !isDemo) {
+      // Block sign-in until the email is verified (demo accounts are exempt).
+      if (user != null &&
+          !user.emailVerified &&
+          !isDemo &&
+          !isBuiltInStaff) {
         if (!mounted) return;
         final messenger = ScaffoldMessenger.of(context);
         await showDialog(
@@ -551,12 +558,15 @@ class _LoginPageState extends State<LoginPage> {
       await UserRoleStore.load();
 
       if (isDemo) {
-        // Demo account: unlock the whole trail so every feature is showcased.
-        TrailProgress.unlockAll();
+        // Demo account: unlock the whole trail so every feature is showcased
+        // (also pushed to the shared database so the website matches).
+        await TrailProgress.unlockAll();
       } else {
         // Real account: restore this device's actual saved progress
-        // (clears any leftover demo unlock from the same session).
+        // (clears any leftover demo unlock from the same session)…
         await TrailProgress.load();
+        // …then merge it with whatever this account has on the website.
+        await TrailProgress.syncWithCloud();
       }
 
       if (!mounted) return;

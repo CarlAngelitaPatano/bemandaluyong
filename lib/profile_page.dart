@@ -16,6 +16,8 @@ import 'motion.dart'; // Reveal / PopIn animations
 import 'face_check.dart'; // profile-photo face verification
 import 'avatars.dart'; // built-in avatar option
 import 'user_role.dart'; // Tourist / Mandaleño
+import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
+import 'admin_panel.dart'; // CCAT staff panel
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
 /// keyed per account). Shared so other screens (e.g. the home app bar) can
@@ -91,6 +93,7 @@ class _ProfilePageState extends State<ProfilePage> {
     final bytes = await ProfileAvatarStore.load();
     final preset = await ProfileAvatarStore.loadPreset();
     final role = await UserRoleStore.load();
+    await StaffAccess.check(); // is this account CCAT staff?
     if (mounted) {
       setState(() {
         _avatarBytes = bytes;
@@ -475,37 +478,48 @@ class _ProfilePageState extends State<ProfilePage> {
               const SizedBox(height: 2),
               Text(email, style: text.bodyMedium?.copyWith(color: colors.outline)),
               const SizedBox(height: AppSpacing.s),
-              // Tourist / Mandaleño badge
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: _role.color.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(
-                      color: _role.color.withValues(alpha: 0.5)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(_role.icon, size: 15, color: _role.color),
-                    const SizedBox(width: 6),
-                    Text(
-                      _role.label,
-                      style: text.labelMedium?.copyWith(
-                        color: _role.color,
-                        fontWeight: FontWeight.w700,
+              // Role badge — "CCAT Officer" for staff, Tourist/Mandaleño
+              // for visitors.
+              Builder(builder: (context) {
+                final staff = StaffAccess.isStaff;
+                final badgeColor =
+                    staff ? colors.primary : _role.color;
+                final badgeIcon = staff
+                    ? Icons.admin_panel_settings_outlined
+                    : _role.icon;
+                final badgeLabel = staff ? 'CCAT Officer' : _role.label;
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: badgeColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(
+                        color: badgeColor.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(badgeIcon, size: 15, color: badgeColor),
+                      const SizedBox(width: 6),
+                      Text(
+                        badgeLabel,
+                        style: text.labelMedium?.copyWith(
+                          color: badgeColor,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
+                    ],
+                  ),
+                );
+              }),
             ],
           ),
         ),
         const SizedBox(height: AppSpacing.xxl),
 
-        // ----- Trail progress -----
+        // ----- Trail progress (visitors only — not relevant to CCAT staff) --
+        if (!StaffAccess.isStaff)
         Reveal(
           delayMs: 120,
           child: Card(
@@ -567,32 +581,34 @@ class _ProfilePageState extends State<ProfilePage> {
         ),
         const SizedBox(height: AppSpacing.xl),
 
-        // ----- Achievements -----
-        Text('Achievements', style: text.titleMedium),
-        const SizedBox(height: 2),
-        Text(
-          '${kBadges.where((b) => visited >= b.threshold).length} of '
-          '${kBadges.length} earned',
-          style: text.bodySmall?.copyWith(color: colors.outline),
-        ),
-        const SizedBox(height: AppSpacing.m),
-        SizedBox(
-          height: 110,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            itemCount: kBadges.length,
-            separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.l),
-            // Badges pop in one after another with a springy bounce.
-            itemBuilder: (context, i) => PopIn(
-              delayMs: 250 + i * 90,
-              child: _BadgeTile(
-                badge: kBadges[i],
-                earned: visited >= kBadges[i].threshold,
+        // ----- Achievements (visitors only) -----
+        if (!StaffAccess.isStaff) ...[
+          Text('Achievements', style: text.titleMedium),
+          const SizedBox(height: 2),
+          Text(
+            '${kBadges.where((b) => visited >= b.threshold).length} of '
+            '${kBadges.length} earned',
+            style: text.bodySmall?.copyWith(color: colors.outline),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          SizedBox(
+            height: 110,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: kBadges.length,
+              separatorBuilder: (_, _) => const SizedBox(width: AppSpacing.l),
+              // Badges pop in one after another with a springy bounce.
+              itemBuilder: (context, i) => PopIn(
+                delayMs: 250 + i * 90,
+                child: _BadgeTile(
+                  badge: kBadges[i],
+                  earned: visited >= kBadges[i].threshold,
+                ),
               ),
             ),
           ),
-        ),
-        const SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.xl),
+        ],
 
         // ----- Account -----
         Text('Account', style: text.titleMedium),
@@ -624,6 +640,32 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
         ),
         const SizedBox(height: AppSpacing.xl),
+
+        // ----- CCAT staff panel (only for registered staff accounts) -----
+        if (StaffAccess.isStaff) ...[
+          Reveal(
+            delayMs: 300,
+            child: Card(
+              color: colors.primary.withValues(alpha: 0.06),
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: colors.primary.withValues(alpha: 0.12),
+                  child: Icon(Icons.admin_panel_settings_outlined,
+                      color: colors.primary),
+                ),
+                title: const Text('CCAT Staff Panel'),
+                subtitle:
+                    const Text('Review applications, publish announcements'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const AdminPanelPage()),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+        ],
 
         // ----- Settings -----
         Text('Settings', style: text.titleMedium),
@@ -657,9 +699,20 @@ class _ProfilePageState extends State<ProfilePage> {
               ],
               const Divider(height: 1),
               ListTile(
-                leading: const Icon(Icons.feedback_outlined),
-                title: const Text('Send feedback'),
-                subtitle: const Text('Report a bug or share a suggestion'),
+                leading: const Icon(Icons.rate_review_outlined),
+                title: const Text('Share your feedback'),
+                subtitle: const Text('Rate your experience — sent to CCAT'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const FeedbackPage()),
+                ),
+              ),
+              const Divider(height: 1),
+              ListTile(
+                leading: const Icon(Icons.bug_report_outlined),
+                title: const Text('Report a problem'),
+                subtitle: const Text('Email the developers about a bug'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: _sendFeedback,
               ),
