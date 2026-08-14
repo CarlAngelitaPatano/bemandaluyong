@@ -1,0 +1,781 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
+import 'theme.dart';
+import 'motion.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'events_manager.dart';
+import 'announcements.dart';
+import 'analytics_dashboard.dart';
+import 'event_requests.dart';
+import 'staff_report.dart';
+import 'local_notifs.dart';
+import 'admin_panel.dart' show kAnnouncementPublisher;
+
+// ===========================================================================
+// CCAT Staff console.
+//
+// The staff tier handles day-to-day operations:
+//   • create and update city events, and file post-event reports
+//   • publish announcements to every app user
+//   • read visitor feedback from tourists and Mandaleños
+//
+// Accreditation decisions and user records stay with administrators.
+// ===========================================================================
+
+/// Watches the two things staff need to know about, and raises a phone
+/// notification the first time each one is seen:
+///   • a Mandaleño submitted an event request
+///   • a visitor left new feedback and a rating
+class StaffAlerts {
+  StaffAlerts._();
+
+  static const String _seenKey = 'staff_seen_alert_ids';
+
+  static Future<Set<String>> _seen() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_seenKey) ?? const <String>[]).toSet();
+  }
+
+  static Future<void> _markSeen(Iterable<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    final all = (prefs.getStringList(_seenKey) ?? <String>[]).toSet()
+      ..addAll(ids);
+    await prefs.setStringList(_seenKey, all.toList());
+  }
+
+  /// Checks all three sources and notifies about anything new.
+  static Future<void> check() async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final seen = await _seen();
+      final fresh = <String>[];
+      final messages = <({String title, String body})>[];
+
+      // 1. New community event requests
+      final reqs = await db
+          .collection(kEventRequestCollection)
+          .where('status', isEqualTo: 'pending')
+          .get();
+      for (final d in reqs.docs) {
+        final key = 'req_${d.id}';
+        if (seen.contains(key)) continue;
+        fresh.add(key);
+        messages.add((
+          title: 'New event request',
+          body: '${d.data()['requestedByName'] ?? 'A resident'} proposed '
+              '"${d.data()['title'] ?? 'an activity'}"',
+        ));
+      }
+
+      // 2. New visitor feedback
+      final fb = await db
+          .collection('feedback')
+          .orderBy('createdAt', descending: true)
+          .limit(20)
+          .get();
+      for (final d in fb.docs) {
+        final key = 'fb_${d.id}';
+        if (seen.contains(key)) continue;
+        fresh.add(key);
+        final m = d.data();
+        final rating = (m['rating'] as num?)?.toInt() ?? 0;
+        final sentiment = (m['sentiment'] ?? '').toString();
+        messages.add((
+          title: 'New feedback · rating $rating of 5'
+              '${sentiment.isEmpty ? '' : ' · $sentiment'}',
+          body: (m['message'] ?? '').toString(),
+        ));
+      }
+
+      if (fresh.isEmpty) return;
+
+      // First run: remember everything quietly instead of a burst of alerts.
+      if (seen.isEmpty) {
+        await _markSeen(fresh);
+        return;
+      }
+
+      for (final m in messages.take(4)) {
+        await LocalNotifs.showNow(
+          title: m.title,
+          body: m.body.length > 120 ? '${m.body.substring(0, 117)}…' : m.body,
+        );
+      }
+      await _markSeen(fresh);
+    } catch (_) {
+      // Permissions or connectivity — alerts are best-effort.
+    }
+  }
+}
+
+class StaffHomeView extends StatefulWidget {
+  const StaffHomeView({super.key});
+
+  @override
+  State<StaffHomeView> createState() => _StaffHomeViewState();
+}
+
+class _StaffHomeViewState extends State<StaffHomeView> {
+  int? _upcoming;
+  int? _needsReport;
+  int? _feedback;
+  int? _requests;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+    StaffAlerts.check(); // notify about new requests, feedback, decisions
+  }
+
+  Future<void> _load() async {
+    try {
+      final db = FirebaseFirestore.instance;
+      final results = await Future.wait([
+        db.collection(kEventsCollection).get(),
+        db.collection('feedback').get(),
+        db
+            .collection(kEventRequestCollection)
+            .where('status', isEqualTo: 'pending')
+            .get(),
+      ]);
+      final events = results[0].docs;
+      if (!mounted) return;
+      setState(() {
+        _upcoming = events
+            .where((d) => (d.data()['status'] ?? 'upcoming') == 'upcoming')
+            .length;
+        // Finished events that still have no report filed.
+        _needsReport = events.where((d) {
+          final m = d.data();
+          return (m['status'] ?? '') == 'completed' &&
+              (m['report'] ?? '').toString().trim().isEmpty;
+        }).length;
+        _feedback = results[1].docs.length;
+        _requests = results[2].docs.length;
+      });
+    } catch (_) {
+      // Permission or connectivity — tiles show a dash.
+    }
+  }
+
+  void _open(Widget page) {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => page))
+        .then((_) => _load());
+  }
+
+  /// One-line summary of what needs doing today.
+  String _workloadLine() {
+    final pending = (_requests ?? 0) + (_needsReport ?? 0);
+    if (_requests == null) return 'Loading your workload…';
+    if (pending == 0) return 'Nothing pending — you\'re all caught up';
+    final parts = <String>[];
+    if ((_requests ?? 0) > 0) {
+      parts.add('$_requests request${_requests == 1 ? '' : 's'}');
+    }
+    if ((_needsReport ?? 0) > 0) {
+      parts.add('$_needsReport report${_needsReport == 1 ? '' : 's'}');
+    }
+    return '${parts.join(' · ')} waiting for you';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final name = FirebaseAuth.instance.currentUser?.displayName;
+    final hour = DateTime.now().hour;
+    final greeting = hour < 12
+        ? 'Good morning'
+        : (hour < 18 ? 'Good afternoon' : 'Good evening');
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: ListView(
+        padding: const EdgeInsets.all(AppSpacing.l),
+        children: [
+          // ---- Staff header ----
+          Reveal(
+            delayMs: 0,
+            child: Container(
+              padding: const EdgeInsets.all(AppSpacing.xl),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
+                ),
+                borderRadius: BorderRadius.circular(AppRadius.xl),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF12305F).withValues(alpha: 0.22),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: AppTheme.brandGold.withValues(alpha: 0.7),
+                              width: 1.5),
+                        ),
+                        child: const Icon(Icons.badge_outlined,
+                            color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: AppSpacing.m),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'CCAT STAFF',
+                              style: text.labelSmall?.copyWith(
+                                color: AppTheme.brandGold,
+                                letterSpacing: 1.2,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              (name == null || name.trim().isEmpty)
+                                  ? 'Staff member'
+                                  : name.trim(),
+                              style: text.titleLarge?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.l),
+                  Container(
+                    width: 44,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: AppTheme.brandGold,
+                      borderRadius: BorderRadius.circular(99),
+                    ),
+                  ),
+                  const SizedBox(height: AppSpacing.m),
+                  Row(
+                    children: [
+                      Icon(Icons.wb_sunny_outlined,
+                          size: 15,
+                          color: Colors.white.withValues(alpha: 0.75)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '$greeting · ${_today()}',
+                          style: text.bodySmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(Icons.task_alt,
+                          size: 15,
+                          color: Colors.white.withValues(alpha: 0.75)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _workloadLine(),
+                          style: text.bodySmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.l),
+
+          // ---- Community requests waiting ----
+          if ((_requests ?? 0) > 0)
+            Reveal(
+              delayMs: 30,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: AppSpacing.m),
+                padding: const EdgeInsets.all(AppSpacing.m),
+                decoration: BoxDecoration(
+                  color: colors.primary.withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(
+                      color: colors.primary.withValues(alpha: 0.35)),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.inbox_rounded, color: colors.primary, size: 20),
+                    const SizedBox(width: AppSpacing.s),
+                    Expanded(
+                      child: Text(
+                        '$_requests event request'
+                        '${_requests == 1 ? '' : 's'} from residents',
+                        style: text.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: colors.primary),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () =>
+                          _open(const EventRequestsReviewPage()),
+                      child: const Text('Review'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // ---- Reports outstanding ----
+          if ((_needsReport ?? 0) > 0)
+            Reveal(
+              delayMs: 40,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: AppSpacing.l),
+                padding: const EdgeInsets.all(AppSpacing.m),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEF6C00).withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(
+                      color: const Color(0xFFEF6C00).withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.edit_note_rounded,
+                        color: Color(0xFFEF6C00), size: 20),
+                    const SizedBox(width: AppSpacing.s),
+                    Expanded(
+                      child: Text(
+                        '$_needsReport completed event'
+                        '${_needsReport == 1 ? '' : 's'} still need a report',
+                        style: text.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFFEF6C00)),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => _open(const EventsManagerPage()),
+                      child: const Text('File'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // ---- Metrics ----
+          Reveal(
+            delayMs: 60,
+            child: Text('AT A GLANCE',
+                style: text.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.0,
+                  color: colors.outline,
+                )),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          Reveal(
+            delayMs: 90,
+            child: Row(
+              children: [
+                _StaffStat(
+                  label: 'Upcoming events',
+                  value: _upcoming?.toString() ?? '—',
+                  icon: Icons.event_available_outlined,
+                  onTap: () => _open(const EventsManagerPage()),
+                ),
+                const SizedBox(width: AppSpacing.m),
+                _StaffStat(
+                  label: 'Feedback received',
+                  value: _feedback?.toString() ?? '—',
+                  icon: Icons.forum_outlined,
+                  onTap: () => _open(const AnalyticsDashboardPage()),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          Reveal(
+            delayMs: 120,
+            child: Row(
+              children: [
+                _StaffStat(
+                  label: 'Event requests',
+                  value: _requests?.toString() ?? '—',
+                  icon: Icons.inbox_outlined,
+                  highlight: (_requests ?? 0) > 0,
+                  onTap: () => _open(const EventRequestsReviewPage()),
+                ),
+                const SizedBox(width: AppSpacing.m),
+                _StaffStat(
+                  label: 'Reports pending',
+                  value: _needsReport?.toString() ?? '—',
+                  icon: Icons.edit_note_outlined,
+                  highlight: (_needsReport ?? 0) > 0,
+                  onTap: () => _open(const EventsManagerPage()),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xxl),
+
+          // ---- Tasks ----
+          Reveal(
+            delayMs: 160,
+            child: Text('MY WORK',
+                style: text.labelSmall?.copyWith(
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 1.0,
+                  color: colors.outline,
+                )),
+          ),
+          const SizedBox(height: AppSpacing.m),
+          Reveal(
+            delayMs: 190,
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(AppRadius.lg),
+                border: Border.all(color: colors.outlineVariant),
+              ),
+              child: Column(
+                children: [
+                  _WorkRow(
+                    icon: Icons.event_note_outlined,
+                    title: 'Manage events',
+                    subtitle: 'Add activities and file post-event reports',
+                    onTap: () => _open(const EventsManagerPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _WorkRow(
+                    icon: Icons.inbox_outlined,
+                    title: 'Event requests',
+                    subtitle: 'Proposals from Mandaleño residents',
+                    onTap: () => _open(const EventRequestsReviewPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _WorkRow(
+                    icon: Icons.campaign_outlined,
+                    title: 'Publish an announcement',
+                    subtitle: 'Notify every app user instantly',
+                    onTap: () => _open(const StaffAnnouncementPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _WorkRow(
+                    icon: Icons.insights_outlined,
+                    title: 'Visitor feedback',
+                    subtitle: 'What tourists and Mandaleños are saying',
+                    onTap: () => _open(const AnalyticsDashboardPage()),
+                  ),
+                  Divider(height: 1, color: colors.outlineVariant),
+                  _WorkRow(
+                    icon: Icons.picture_as_pdf_outlined,
+                    title: 'Generate report',
+                    subtitle: 'Printable PDF or CSV to send the administrator',
+                    onTap: () => _open(const StaffReportPage()),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: AppSpacing.xl),
+          Center(
+            child: Text('Be@Mandaluyong · Staff Console',
+                style: text.labelSmall?.copyWith(color: colors.outline)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String _today() {
+  const months = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+  final d = DateTime.now();
+  return '${d.day} ${months[d.month - 1]} ${d.year}';
+}
+
+class _StaffStat extends StatelessWidget {
+  const _StaffStat({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.highlight = false,
+    this.onTap,
+  });
+
+  final String label;
+  final String value;
+  final IconData icon;
+  final bool highlight;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final accent = highlight ? const Color(0xFFEF6C00) : colors.primary;
+
+    return Expanded(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(AppRadius.md),
+            border: Border.all(
+              color: highlight
+                  ? accent.withValues(alpha: 0.55)
+                  : colors.outlineVariant,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: accent, size: 18),
+              const SizedBox(height: AppSpacing.m),
+              Text(value,
+                  style: text.headlineMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      height: 1.0,
+                      color: highlight ? accent : colors.onSurface)),
+              const SizedBox(height: 4),
+              Text(label.toUpperCase(),
+                  style: text.labelSmall?.copyWith(
+                    color: colors.outline,
+                    letterSpacing: 0.5,
+                    fontWeight: FontWeight.w600,
+                  )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkRow extends StatelessWidget {
+  const _WorkRow({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.l, vertical: AppSpacing.m),
+        child: Row(
+          children: [
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: colors.primary.withValues(alpha: 0.10),
+                borderRadius: BorderRadius.circular(AppRadius.sm),
+              ),
+              child: Icon(icon, size: 19, color: colors.primary),
+            ),
+            const SizedBox(width: AppSpacing.m),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title,
+                      style: text.bodyLarge
+                          ?.copyWith(fontWeight: FontWeight.w600)),
+                  Text(subtitle,
+                      style: text.bodySmall
+                          ?.copyWith(color: colors.outline)),
+                ],
+              ),
+            ),
+            Icon(Icons.chevron_right, color: colors.outlineVariant),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Publish an announcement (staff version — same power as the admin form)
+// ---------------------------------------------------------------------------
+class StaffAnnouncementPage extends StatefulWidget {
+  const StaffAnnouncementPage({super.key});
+
+  @override
+  State<StaffAnnouncementPage> createState() => _StaffAnnouncementPageState();
+}
+
+class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _title = TextEditingController();
+  final _body = TextEditingController();
+  String _category = 'General';
+  bool _pinned = false;
+  bool _sending = false;
+
+  static const _categories = ['General', 'Advisory', 'Event', 'Emergency'];
+
+  @override
+  void dispose() {
+    _title.dispose();
+    _body.dispose();
+    super.dispose();
+  }
+
+  Future<void> _publish() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() => _sending = true);
+    try {
+      await FirebaseFirestore.instance
+          .collection(kAnnouncementCollection)
+          .add({
+        'title': _title.text.trim(),
+        'body': _body.text.trim(),
+        'category': _category,
+        'author': kAnnouncementPublisher,
+        'pinned': _pinned,
+        'publishedAt': FieldValue.serverTimestamp(),
+        'postedBy': FirebaseAuth.instance.currentUser?.email ?? '',
+      });
+      if (!mounted) return;
+      _title.clear();
+      _body.clear();
+      setState(() {
+        _category = 'General';
+        _pinned = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Published — every user has been notified')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not publish. Check connection.')),
+      );
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('New announcement')),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          children: [
+            Text('Publish to all app users', style: text.titleMedium),
+            const SizedBox(height: 4),
+            Text(
+              'Everyone receives a phone notification when this is posted.',
+              style: text.bodySmall,
+            ),
+            const SizedBox(height: AppSpacing.l),
+            TextFormField(
+              controller: _title,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Headline',
+                prefixIcon: Icon(Icons.title),
+                border: OutlineInputBorder(),
+              ),
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty) ? 'Enter a headline' : null,
+            ),
+            const SizedBox(height: AppSpacing.m),
+            TextFormField(
+              controller: _body,
+              maxLines: 5,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(
+                labelText: 'Details',
+                alignLabelWithHint: true,
+                border: OutlineInputBorder(),
+              ),
+              validator: (v) =>
+                  (v == null || v.trim().isEmpty) ? 'Enter the details' : null,
+            ),
+            const SizedBox(height: AppSpacing.m),
+            DropdownButtonFormField<String>(
+              initialValue: _category,
+              decoration: const InputDecoration(
+                labelText: 'Category',
+                prefixIcon: Icon(Icons.label_outline),
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final c in _categories)
+                  DropdownMenuItem(value: c, child: Text(c)),
+              ],
+              onChanged: (v) => setState(() => _category = v ?? _category),
+            ),
+            CheckboxListTile(
+              value: _pinned,
+              onChanged: (v) => setState(() => _pinned = v ?? false),
+              controlAffinity: ListTileControlAffinity.leading,
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Pin to the top'),
+            ),
+            const SizedBox(height: AppSpacing.m),
+            FilledButton.icon(
+              onPressed: _sending ? null : _publish,
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: AppSpacing.m),
+              ),
+              icon: _sending
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.campaign_rounded),
+              label: Text(_sending ? 'Publishing…' : 'Publish announcement'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

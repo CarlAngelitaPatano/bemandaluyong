@@ -92,7 +92,7 @@ class LocalNotifs {
     );
     await _plugin.zonedSchedule(
       id: 1001, // stable id — rescheduling replaces, never duplicates
-      title: 'Good morning! ☀️',
+      title: 'Good morning',
       body: 'Check today\'s Mandaluyong weather and continue your Heritage Trail.',
       scheduledDate: _next7am(),
       notificationDetails: details,

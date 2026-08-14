@@ -17,7 +17,8 @@ import 'face_check.dart'; // profile-photo face verification
 import 'avatars.dart'; // built-in avatar option
 import 'user_role.dart'; // Tourist / Mandaleño
 import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
-import 'admin_panel.dart'; // CCAT staff panel
+import 'admin_panel.dart'; // CCAT roles + admin console
+import 'events_manager.dart'; // staff event management
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
 /// keyed per account). Shared so other screens (e.g. the home app bar) can
@@ -487,7 +488,9 @@ class _ProfilePageState extends State<ProfilePage> {
                 final badgeIcon = staff
                     ? Icons.admin_panel_settings_outlined
                     : _role.icon;
-                final badgeLabel = staff ? 'CCAT Officer' : _role.label;
+                final badgeLabel = StaffAccess.isAdmin
+                    ? 'CCAT Administrator'
+                    : (staff ? 'CCAT Staff' : _role.label);
                 return Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 6),
@@ -555,7 +558,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 const SizedBox(height: AppSpacing.s),
                 Text(
                   completed
-                      ? 'Completed all $total stops 🎉'
+                      ? 'Completed all $total stops'
                       : '$visited of $total stops visited',
                   style: text.bodyMedium?.copyWith(
                     color: completed ? success : colors.outline,
@@ -653,13 +656,20 @@ class _ProfilePageState extends State<ProfilePage> {
                   child: Icon(Icons.admin_panel_settings_outlined,
                       color: colors.primary),
                 ),
-                title: const Text('CCAT Staff Panel'),
-                subtitle:
-                    const Text('Review applications, publish announcements'),
+                title: Text(StaffAccess.isAdmin
+                    ? 'CCAT Admin Console'
+                    : 'CCAT Staff Console'),
+                subtitle: Text(StaffAccess.isAdmin
+                    ? 'Applications, announcements, user records'
+                    : 'Events, announcements, visitor feedback'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const AdminPanelPage()),
+                  MaterialPageRoute(
+                    builder: (_) => StaffAccess.isAdmin
+                        ? const AdminPanelPage()
+                        : const EventsManagerPage(),
+                  ),
                 ),
               ),
             ),
@@ -698,17 +708,21 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
               ],
               const Divider(height: 1),
-              ListTile(
-                leading: const Icon(Icons.rate_review_outlined),
-                title: const Text('Share your feedback'),
-                subtitle: const Text('Rate your experience — sent to CCAT'),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const FeedbackPage()),
+              // Visitor feedback is for the public — CCAT accounts read it in
+              // the analytics dashboard instead of submitting it.
+              if (!StaffAccess.isStaff) ...[
+                ListTile(
+                  leading: const Icon(Icons.rate_review_outlined),
+                  title: const Text('Share your feedback'),
+                  subtitle: const Text('Rate your experience — sent to CCAT'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const FeedbackPage()),
+                  ),
                 ),
-              ),
-              const Divider(height: 1),
+                const Divider(height: 1),
+              ],
               ListTile(
                 leading: const Icon(Icons.bug_report_outlined),
                 title: const Text('Report a problem'),

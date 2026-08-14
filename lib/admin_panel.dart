@@ -22,12 +22,24 @@ import 'feedback_page.dart'; // FeedbackSchema
 // credentials are ever hard-coded in the app.
 // ===========================================================================
 
-/// Built-in demonstration staff account.
+/// Built-in demonstration accounts.
 ///
-/// Logging in with this email grants CCAT staff access immediately, without
-/// needing a `staff/{uid}` document — handy for presentations and for testing
-/// the staff workflow. Real officers are still registered in Firestore.
+/// Logging in with either email grants CCAT access immediately, without
+/// needing a `staff/{uid}` document — handy for presentations. Real officers
+/// are registered in Firestore.
 const String kAdminEmail = 'admin@bemandaluyong.com';
+const String kStaffEmail = 'staff@bemandaluyong.com';
+
+/// Author shown on announcements published from the app.
+const String kAnnouncementPublisher = 'Office of the City Mayor';
+
+/// Two levels of CCAT access.
+///   • [CcatRole.admin] — full control: accreditation decisions, user records,
+///     announcements, events and analytics.
+///   • [CcatRole.staff] — day-to-day work: manage events, publish
+///     announcements and read visitor feedback. No accreditation decisions
+///     and no access to user records.
+enum CcatRole { none, staff, admin }
 
 class StaffAccess {
   StaffAccess._();
@@ -35,25 +47,34 @@ class StaffAccess {
   static const String collection = 'staff';
 
   /// Cached so the UI can check synchronously after the first load.
-  static bool isStaff = false;
+  static CcatRole role = CcatRole.none;
 
-  /// True when the signed-in account is the built-in demo administrator.
-  static bool get isBuiltInAdmin =>
-      FirebaseAuth.instance.currentUser?.email?.toLowerCase() == kAdminEmail;
+  /// Any CCAT account (staff or admin).
+  static bool get isStaff => role != CcatRole.none;
 
-  /// Checks whether the signed-in account is CCAT staff — either the built-in
-  /// demo administrator, or an account registered in the `staff` collection.
-  static Future<bool> check() async {
+  /// Full administrator only.
+  static bool get isAdmin => role == CcatRole.admin;
+
+  /// Staff tier specifically (not an administrator).
+  static bool get isStaffOnly => role == CcatRole.staff;
+
+  /// Determines the signed-in account's CCAT role.
+  static Future<CcatRole> check() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
-      isStaff = false;
-      return false;
+      role = CcatRole.none;
+      return role;
     }
 
-    // Temporary/demo administrator — always allowed.
-    if (isBuiltInAdmin) {
-      isStaff = true;
-      return true;
+    // Built-in demonstration accounts.
+    final email = user.email?.toLowerCase();
+    if (email == kAdminEmail) {
+      role = CcatRole.admin;
+      return role;
+    }
+    if (email == kStaffEmail) {
+      role = CcatRole.staff;
+      return role;
     }
 
     try {
@@ -61,11 +82,18 @@ class StaffAccess {
           .collection(collection)
           .doc(user.uid)
           .get();
-      isStaff = doc.exists;
+      if (!doc.exists) {
+        role = CcatRole.none;
+      } else {
+        // A `role` field of "admin" grants full access; anything else
+        // (or a missing field) is the staff tier.
+        final r = (doc.data()?['role'] ?? 'staff').toString().toLowerCase();
+        role = r == 'admin' ? CcatRole.admin : CcatRole.staff;
+      }
     } catch (_) {
-      isStaff = false;
+      role = CcatRole.none;
     }
-    return isStaff;
+    return role;
   }
 }
 

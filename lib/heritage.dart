@@ -18,6 +18,7 @@ import 'achievements.dart'; // trail badges + unlock celebration
 import 'motion.dart'; // Reveal / PopIn animations
 import 'cloud_sync.dart'; // shared account progress (app ↔ website)
 import 'user_role.dart'; // Tourist / Mandaleño
+import 'user_profile.dart'; // date of birth / minimum trail age
 
 /// A heritage church in Mandaluyong.
 class Church {
@@ -387,7 +388,6 @@ class HeritageChurchesView extends StatelessWidget {
 class _TrailBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     return InkWell(
       borderRadius: BorderRadius.circular(18),
       onTap: () => Navigator.push(
@@ -397,8 +397,10 @@ class _TrailBanner extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [colors.primary, colors.tertiary],
+          // Fixed navy gradient so the white text is always readable, in
+          // light and dark mode alike.
+          gradient: const LinearGradient(
+            colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
@@ -412,10 +414,10 @@ class _TrailBanner extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     'Heritage Church Trail',
                     style: TextStyle(
-                      color: colors.onPrimary,
+                      color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 17,
                     ),
@@ -424,14 +426,14 @@ class _TrailBanner extends StatelessWidget {
                   Text(
                     'A self-guided walk through ${kChurches.length} historic churches',
                     style: TextStyle(
-                      color: colors.onPrimary.withValues(alpha: 0.9),
+                      color: Colors.white.withValues(alpha: 0.9),
                       fontSize: 13,
                     ),
                   ),
                 ],
               ),
             ),
-            Icon(Icons.arrow_forward, color: colors.onPrimary),
+            const Icon(Icons.arrow_forward, color: Colors.white),
           ],
         ),
       ),
@@ -690,6 +692,32 @@ class HeritageTrailPage extends StatefulWidget {
 
 class _HeritageTrailPageState extends State<HeritageTrailPage> {
   Future<void> _verify(Church c) async {
+    // The trail involves travelling to real locations, so it has a minimum
+    // age requirement.
+    if (!UserProfileStore.canJoinTrail) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: const Icon(Icons.info_outline, size: 40),
+          title: const Text('Age requirement'),
+          content: Text(
+            'The Heritage Church Trail is for visitors aged '
+            '$kMinimumTrailAge and above, because it involves travelling to '
+            'churches around the city and verifying each visit.\n\n'
+            'You can still explore every church, attraction and city service '
+            'in the app.',
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('I understand'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => VerifyVisitPage(church: c)),
@@ -819,7 +847,6 @@ class _CompletionBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -838,10 +865,10 @@ class _CompletionBanner extends StatelessWidget {
           const Icon(Icons.emoji_events,
               color: AppTheme.brandGold, size: 44),
           const SizedBox(height: 8),
-          Text(
+          const Text(
             'Trail Complete!',
             style: TextStyle(
-              color: colors.onPrimary,
+              color: Colors.white,
               fontSize: 20,
               fontWeight: FontWeight.bold,
             ),
@@ -850,7 +877,7 @@ class _CompletionBanner extends StatelessWidget {
           Text(
             'You visited all the heritage churches of Mandaluyong.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: colors.onPrimary.withValues(alpha: 0.9)),
+            style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
           ),
           const SizedBox(height: 14),
           FilledButton.icon(
@@ -1321,8 +1348,8 @@ class _CertificatePageState extends State<CertificatePage> {
       await SharePlus.instance.share(
         ShareParams(
           files: [XFile(file.path)],
-          text: 'I completed the Heritage Church Trail of Mandaluyong! '
-              '🏛️ — Be@Mandaluyong',
+          text: 'I completed the Heritage Church Trail of Mandaluyong '
+              '— Be@Mandaluyong',
         ),
       );
     } catch (_) {

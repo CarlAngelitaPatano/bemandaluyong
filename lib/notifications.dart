@@ -5,8 +5,12 @@ import 'theme.dart';
 import 'heritage.dart'; // TrailProgress, kChurches, HeritageTrailPage
 import 'city_content.dart'; // EventsPage
 import 'news_page.dart'; // NewsPage
-import 'weather.dart'; // WeatherService (weather notification)
 import 'motion.dart'; // Reveal animation
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'admin_panel.dart'; // StaffAccess, AdminPanelPage
+import 'accreditation.dart'; // kAccreditationCollection, kRequirements
+import 'event_requests.dart'; // kEventRequestCollection, review page
+import 'analytics_dashboard.dart'; // feedback analytics
 
 // ===========================================================================
 // In-app notifications.
@@ -16,7 +20,15 @@ import 'motion.dart'; // Reveal animation
 // ===========================================================================
 
 /// Where a notification takes the user when tapped.
-enum NotifAction { none, trail, events, news }
+enum NotifAction {
+  none,
+  trail,
+  events,
+  news,
+  feedback,
+  eventRequests,
+  approvals,
+}
 
 class AppNotification {
   final String id;
@@ -48,29 +60,13 @@ class NotificationService {
 
     final list = <AppNotification>[];
 
-    // Today's weather (if fetched) — advice adapts to the conditions.
-    final w = WeatherService.last;
-    if (w != null) {
-      final now = DateTime.now();
-      final day = '${now.year}${now.month}${now.day}';
-      final rainy = const [51, 53, 55, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99]
-          .contains(w.code);
-      list.add(AppNotification(
-        id: 'weather_$day',
-        title: 'Today in Mandaluyong: ${w.tempC.round()}°C · ${w.label}',
-        body: rainy
-            ? 'Rain expected — bring an umbrella if you\'re walking the '
-                'Heritage Trail today. ☔'
-            : 'Looks like a good day to explore the city and the Heritage '
-                'Trail! 🌤️',
-        icon: w.icon,
-      ));
-    }
+    // (The daily weather notification was removed — live weather is already
+    // shown on the home dashboard.)
 
     if (total > 0 && visited >= total) {
       list.add(const AppNotification(
         id: 'trail_done',
-        title: 'Heritage Trail complete! 🎉',
+        title: 'Heritage Trail complete',
         body: 'You\'ve verified every church. Tap to claim your certificate.',
         icon: Icons.emoji_events_outlined,
         action: NotifAction.trail,
@@ -83,22 +79,10 @@ class NotificationService {
         icon: Icons.church_outlined,
         action: NotifAction.trail,
       ));
-    } else {
-      list.add(const AppNotification(
-        id: 'trail_start',
-        title: 'Start the Heritage Church Trail',
-        body: 'Visit Mandaluyong\'s historic churches and earn a certificate.',
-        icon: Icons.map_outlined,
-        action: NotifAction.trail,
-      ));
     }
+    // (No "start the trail" prompt — progress notifications appear only once
+    // the user has actually verified a church.)
 
-    list.add(const AppNotification(
-      id: 'announcements_intro',
-      title: 'Official city announcements',
-      body: 'Advisories and updates from the Office of the City Mayor.',
-      icon: Icons.campaign_outlined,
-    ));
     list.add(const AppNotification(
       id: 'news_intro',
       title: 'Latest Mandaluyong news',
@@ -113,14 +97,105 @@ class NotificationService {
       icon: Icons.event_outlined,
       action: NotifAction.events,
     ));
-    list.add(const AppNotification(
-      id: 'welcome',
-      title: 'Welcome to Be@Mandaluyong',
-      body: 'Explore the heritage, news, services, and attractions of the city.',
-      icon: Icons.celebration_outlined,
-    ));
 
     return list;
+  }
+
+  /// The staff notification feed: visitor feedback (with its rating, from
+  /// both Tourists and Mandaleños) and event requests from residents.
+  static Future<List<AppNotification>> buildForStaff() async {
+    final list = <AppNotification>[];
+    final db = FirebaseFirestore.instance;
+
+    try {
+      // ---- Event requests awaiting review ----
+      final reqs = await db
+          .collection(kEventRequestCollection)
+          .where('status', isEqualTo: 'pending')
+          .get();
+      for (final d in reqs.docs) {
+        final m = d.data();
+        list.add(AppNotification(
+          id: 'req_${d.id}',
+          title: 'Event request: ${m['title'] ?? 'Untitled'}',
+          body: '${m['requestedByName'] ?? 'A resident'} proposed this '
+              'activity. Tap to review it.',
+          icon: Icons.inbox_outlined,
+          action: NotifAction.eventRequests,
+        ));
+      }
+
+      // ---- Recent visitor feedback with ratings ----
+      final fb = await db
+          .collection('feedback')
+          .orderBy('createdAt', descending: true)
+          .limit(25)
+          .get();
+      for (final d in fb.docs) {
+        final m = d.data();
+        final rating = (m['rating'] as num?)?.toInt() ?? 0;
+        final userType = (m['userType'] ?? '').toString();
+        final sentiment = (m['sentiment'] ?? '').toString();
+        final subject = (m['subject'] ?? '').toString();
+        list.add(AppNotification(
+          id: 'fb_${d.id}',
+          title: 'Rating $rating of 5 · '
+              '${userType.isEmpty ? 'Visitor' : userType}'
+              '${sentiment.isEmpty ? '' : ' · $sentiment'}',
+          body: [
+            if (subject.isNotEmpty) subject,
+            (m['message'] ?? '').toString(),
+          ].where((s) => s.isNotEmpty).join(' — '),
+          icon: sentiment == 'negative'
+              ? Icons.sentiment_dissatisfied_outlined
+              : (sentiment == 'positive'
+                  ? Icons.sentiment_satisfied_alt_outlined
+                  : Icons.rate_review_outlined),
+          action: NotifAction.feedback,
+        ));
+      }
+    } catch (_) {
+      // Offline or permissions — show an empty feed rather than an error.
+    }
+    return list;
+  }
+
+  /// The administrator feed: only items waiting on an approve/decline
+  /// decision — accreditation applications submitted for review.
+  static Future<List<AppNotification>> buildForAdmin() async {
+    final list = <AppNotification>[];
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection(kAccreditationCollection)
+          .get();
+      for (final d in snap.docs) {
+        final m = d.data();
+        final status = (m['status'] ?? 'pending').toString();
+        // Only things still needing a decision.
+        if (status != 'pending' && status != 'under_review') continue;
+        final reqs = Map<String, dynamic>.from(m['requirements'] ?? {});
+        final met = reqs.values.where((v) => v == true).length;
+        list.add(AppNotification(
+          id: 'acc_${d.id}_$status',
+          title: 'Approval needed: ${m['businessName'] ?? 'Application'}',
+          body: '${m['businessType'] ?? 'Tourism business'} · '
+              '$met of ${kRequirements.length} requirements declared. '
+              'Tap to approve or decline.',
+          icon: Icons.assignment_turned_in_outlined,
+          action: NotifAction.approvals,
+        ));
+      }
+    } catch (_) {
+      // Offline or permissions — show an empty feed.
+    }
+    return list;
+  }
+
+  /// The right feed for whoever is signed in.
+  static Future<List<AppNotification>> buildFor() async {
+    if (StaffAccess.isAdmin) return buildForAdmin();
+    if (StaffAccess.isStaff) return buildForStaff();
+    return build();
   }
 
   static Future<Set<String>> readIds() async {
@@ -130,7 +205,8 @@ class NotificationService {
 
   static Future<int> unreadCount() async {
     final read = await readIds();
-    return build().where((n) => !read.contains(n.id)).length;
+    final items = await buildFor();
+    return items.where((n) => !read.contains(n.id)).length;
   }
 
   static Future<void> markRead(String id) async {
@@ -141,8 +217,9 @@ class NotificationService {
 
   static Future<void> markAllRead() async {
     final prefs = await SharedPreferences.getInstance();
+    final items = await buildFor();
     final ids = (prefs.getStringList(_readKey) ?? <String>[]).toSet()
-      ..addAll(build().map((n) => n.id));
+      ..addAll(items.map((n) => n.id));
     await prefs.setStringList(_readKey, ids.toList());
   }
 }
@@ -166,11 +243,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   Future<void> _load() async {
-    await WeatherService.ensureLoaded(); // so the weather notif can appear
+    final items = await NotificationService.buildFor();
     final read = await NotificationService.readIds();
     if (!mounted) return;
     setState(() {
-      _items = NotificationService.build();
+      _items = items;
       _read = read;
       _loading = false;
     });
@@ -189,6 +266,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
       NotifAction.trail => const HeritageTrailPage(),
       NotifAction.events => const EventsPage(),
       NotifAction.news => const NewsPage(),
+      NotifAction.feedback => const AnalyticsDashboardPage(),
+      NotifAction.eventRequests => const EventRequestsReviewPage(),
+      NotifAction.approvals => const AdminPanelPage(),
       NotifAction.none => null,
     };
 

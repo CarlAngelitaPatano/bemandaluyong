@@ -98,7 +98,6 @@ class _WeatherChipState extends State<WeatherChip> {
   Widget build(BuildContext context) {
     final w = _weather;
     if (w == null) return const SizedBox.shrink();
-    final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
 
     return TweenAnimationBuilder<double>(
@@ -118,12 +117,14 @@ class _WeatherChipState extends State<WeatherChip> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(w.icon, size: 16, color: colors.onPrimary),
+          // The chip always sits on the dark navy banner, so it uses fixed
+          // white rather than a theme colour that flips with dark mode.
+          Icon(w.icon, size: 16, color: Colors.white),
           const SizedBox(width: 6),
           Text(
             '${w.tempC.round()}°C · ${w.label}',
             style: text.labelMedium?.copyWith(
-              color: colors.onPrimary,
+              color: Colors.white,
               fontWeight: FontWeight.w600,
             ),
           ),
