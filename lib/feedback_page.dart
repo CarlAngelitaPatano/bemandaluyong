@@ -6,6 +6,10 @@ import 'theme.dart';
 import 'motion.dart';
 import 'user_role.dart';
 import 'sentiment.dart'; // on-device NLP classification
+import 'content_filter.dart'; // profanity / threat / spam screening
+import 'heritage.dart'; // kChurches
+import 'attractions.dart'; // kAttractions
+import 'dining.dart'; // kEateries
 
 // ===========================================================================
 // Visitor feedback.
@@ -30,6 +34,7 @@ class FeedbackSchema {
   static const String fMessage = 'message'; // the text the NLP analyses
   static const String fRating = 'rating'; // 1–5 stars
   static const String fCategory = 'category'; // what it's about
+  static const String fSubject = 'subject'; // the specific place, if named
   static const String fName = 'name'; // display name (may be 'Anonymous')
   static const String fEmail = 'email'; // account email, if signed in
   static const String fUserId = 'userId'; // Firebase uid
@@ -51,6 +56,35 @@ const List<String> kFeedbackCategories = [
   'Other',
 ];
 
+/// The specific places a user can name for a given category, so CCAT can see
+/// exactly which church, landmark or establishment the comment refers to.
+List<String> subjectsForCategory(String category) {
+  switch (category) {
+    case 'Heritage sites & churches':
+      return kChurches.map((c) => c.name).toList();
+    case 'Tourist attractions':
+      return kAttractions.map((a) => a.title).toList();
+    case 'Local businesses & food':
+      return kEateries.map((e) => e.name).toList();
+    default:
+      return const [];
+  }
+}
+
+/// Label for the specific-place dropdown.
+String subjectLabelFor(String category) {
+  switch (category) {
+    case 'Heritage sites & churches':
+      return 'Which church or heritage site?';
+    case 'Tourist attractions':
+      return 'Which attraction?';
+    case 'Local businesses & food':
+      return 'Which establishment?';
+    default:
+      return 'Which place?';
+  }
+}
+
 class FeedbackPage extends StatefulWidget {
   const FeedbackPage({super.key});
 
@@ -63,6 +97,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
   final _message = TextEditingController();
   int _rating = 0;
   String _category = kFeedbackCategories.first;
+  String? _subject; // the specific church / attraction / establishment
   bool _anonymous = false;
   bool _sending = false;
 
@@ -81,6 +116,32 @@ class _FeedbackPageState extends State<FeedbackPage> {
       return;
     }
 
+    // ---- Content moderation: screen before anything is uploaded ----
+    final moderation = ContentFilter.check(_message.text);
+    if (!moderation.isClean) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          icon: Icon(
+            moderation.verdict == ModerationVerdict.threat
+                ? Icons.gpp_maybe_outlined
+                : Icons.edit_note_outlined,
+            color: AppTheme.cityRed,
+            size: 40,
+          ),
+          title: Text(moderation.title),
+          content: Text(moderation.message),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Edit my message'),
+            ),
+          ],
+        ),
+      );
+      return; // nothing is saved
+    }
+
     setState(() => _sending = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
@@ -94,6 +155,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
         FeedbackSchema.fMessage: _message.text.trim(),
         FeedbackSchema.fRating: _rating,
         FeedbackSchema.fCategory: _category,
+        FeedbackSchema.fSubject: _subject ?? '',
         FeedbackSchema.fName: _anonymous
             ? 'Anonymous'
             : (user?.displayName ?? 'Anonymous'),
@@ -225,9 +287,42 @@ class _FeedbackPageState extends State<FeedbackPage> {
                   for (final c in kFeedbackCategories)
                     DropdownMenuItem(value: c, child: Text(c)),
                 ],
-                onChanged: (v) => setState(() => _category = v ?? _category),
+                onChanged: (v) => setState(() {
+                  _category = v ?? _category;
+                  _subject = null; // the place list changes with the category
+                }),
               ),
             ),
+
+            // ---- Specific place (only for categories that have one) ----
+            if (subjectsForCategory(_category).isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.l),
+              Reveal(
+                delayMs: 140,
+                child: DropdownButtonFormField<String>(
+                  initialValue: _subject,
+                  isExpanded: true,
+                  decoration: InputDecoration(
+                    labelText: subjectLabelFor(_category),
+                    prefixIcon: const Icon(Icons.place_outlined),
+                    border: const OutlineInputBorder(),
+                    helperText: 'Optional — helps CCAT act on your feedback',
+                  ),
+                  items: [
+                    const DropdownMenuItem<String>(
+                      value: null,
+                      child: Text('Not specific / general'),
+                    ),
+                    for (final s in subjectsForCategory(_category))
+                      DropdownMenuItem(
+                        value: s,
+                        child: Text(s, overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                  onChanged: (v) => setState(() => _subject = v),
+                ),
+              ),
+            ],
             const SizedBox(height: AppSpacing.l),
 
             // ---- The comment (this is what the NLP analyses) ----

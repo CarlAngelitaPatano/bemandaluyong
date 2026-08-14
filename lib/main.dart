@@ -25,13 +25,17 @@ import 'weather.dart';
 import 'local_notifs.dart';
 import 'avatars.dart'; // built-in avatar option
 import 'user_role.dart'; // Tourist / Mandaleño
+import 'user_profile.dart'; // date of birth / trail age requirement
 import 'emergency.dart'; // emergency hotlines
 import 'announcements.dart'; // official city announcements
 import 'itinerary.dart'; // suggested itineraries
 import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
 import 'analytics_dashboard.dart'; // sentiment analytics dashboard
 import 'accreditation.dart'; // policy management / accreditation
-import 'admin_panel.dart'; // CCAT staff dashboard
+import 'admin_panel.dart'; // CCAT admin console
+import 'staff_panel.dart'; // CCAT staff console
+import 'events_manager.dart'; // staff event management
+import 'event_requests.dart'; // resident event proposals
 import 'sentiment_eval.dart'; // NLP accuracy report
 import 'package:cloud_firestore/cloud_firestore.dart';
 
@@ -126,15 +130,27 @@ class _HomeShellState extends State<HomeShell> {
     ProfilePage(),
   ];
 
-  static const List<Widget> _staffPages = <Widget>[
-    HomePage(), // renders the admin dashboard for staff
+  // Full administrators
+  static const List<Widget> _adminPages = <Widget>[
+    HomePage(), // renders the admin dashboard
     AdminPanelView(),
     AnalyticsDashboardPage(embedded: true),
     ProfilePage(),
   ];
 
-  List<Widget> get _pages =>
-      StaffAccess.isStaff ? _staffPages : _visitorPages;
+  // Staff tier — events, announcements and feedback
+  static const List<Widget> _staffPages = <Widget>[
+    HomePage(), // renders the staff dashboard
+    EventsManagerPage(embedded: true),
+    AnalyticsDashboardPage(embedded: true),
+    ProfilePage(),
+  ];
+
+  List<Widget> get _pages => switch (StaffAccess.role) {
+        CcatRole.admin => _adminPages,
+        CcatRole.staff => _staffPages,
+        CcatRole.none => _visitorPages,
+      };
 
   @override
   void initState() {
@@ -153,13 +169,18 @@ class _HomeShellState extends State<HomeShell> {
       });
     }
     // Load Tourist / Mandaleño so the dashboard shows the right content.
-    UserRoleStore.load().then((_) {
+    UserRoleStore.load().then((role) {
       if (mounted) setState(() {});
+      // Official city announcements are a residents' channel, so only
+      // Mandaleños (and staff) are notified about new ones.
+      if (role == UserRole.mandaleno || StaffAccess.isStaff) {
+        AnnouncementService.checkForNew();
+      }
     });
     _loadAvatar();
     _loadUnread();
-    // Notify the user if the city published a new announcement.
-    AnnouncementService.checkForNew();
+    // Date of birth — drives the Heritage Trail age requirement.
+    UserProfileStore.load();
     // Is this account CCAT staff? Changes the whole home screen.
     StaffAccess.check().then((_) {
       if (mounted) setState(() {});
@@ -243,8 +264,11 @@ class _HomeShellState extends State<HomeShell> {
             ),
           ),
         ),
-        title: Text(
-            StaffAccess.isStaff ? 'CCAT Administration' : 'Be@Mandaluyong'),
+        title: Text(switch (StaffAccess.role) {
+          CcatRole.admin => 'CCAT Administration',
+          CcatRole.staff => 'CCAT Staff',
+          CcatRole.none => 'Be@Mandaluyong',
+        }),
         actions: [
           // Visitor search isn't useful to staff — they get the accuracy
           // report instead.
@@ -284,7 +308,7 @@ class _HomeShellState extends State<HomeShell> {
               icon: Icon(Icons.home_outlined),
               selectedIcon: Icon(Icons.home),
               label: 'Home'),
-          if (StaffAccess.isStaff) ...[
+          if (StaffAccess.isAdmin) ...[
             const NavigationDestination(
                 icon: Icon(Icons.dashboard_outlined),
                 selectedIcon: Icon(Icons.dashboard),
@@ -293,6 +317,15 @@ class _HomeShellState extends State<HomeShell> {
                 icon: Icon(Icons.insights_outlined),
                 selectedIcon: Icon(Icons.insights),
                 label: 'Analytics'),
+          ] else if (StaffAccess.isStaffOnly) ...[
+            const NavigationDestination(
+                icon: Icon(Icons.event_note_outlined),
+                selectedIcon: Icon(Icons.event_note),
+                label: 'Events'),
+            const NavigationDestination(
+                icon: Icon(Icons.insights_outlined),
+                selectedIcon: Icon(Icons.insights),
+                label: 'Feedback'),
           ] else ...[
             const NavigationDestination(
                 icon: Icon(Icons.explore_outlined),
@@ -329,8 +362,9 @@ class HomePage extends StatelessWidget {
         ? 'Good morning'
         : (hour < 18 ? 'Good afternoon' : 'Good evening');
 
-    // CCAT staff get a completely different, work-focused dashboard.
-    if (StaffAccess.isStaff) return const _AdminHomeView();
+    // CCAT accounts get work-focused dashboards instead of the visitor one.
+    if (StaffAccess.isAdmin) return const _AdminHomeView();
+    if (StaffAccess.isStaffOnly) return const StaffHomeView();
 
     // Tourist or Mandaleño — decides the greeting and the "For you" card.
     // (All feature tiles live in the Services tab.)
@@ -626,15 +660,15 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
     final String button;
     final IconData icon;
     if (complete) {
-      title = 'Trail complete! 🎉';
-      subtitle = 'You\'ve visited all $total churches. Claim your certificate!';
+      title = 'Trail complete';
+      subtitle = 'You\'ve visited all $total churches. Claim your certificate.';
       button = 'View your certificate';
       icon = Icons.emoji_events;
     } else if (visited > 0) {
-      title = 'Keep going!';
+      title = 'Keep going';
       subtitle =
           'You\'ve visited $visited of $total churches — $remaining more to '
-          'earn your certificate. 🏆';
+          'earn your certificate.';
       button = 'Continue the trail';
       icon = Icons.church_outlined;
     } else {
@@ -780,10 +814,15 @@ class ServicesGridPage extends StatelessWidget {
       _Feature('3D / AR', Icons.view_in_ar_rounded,
           color: const Color(0xFF00897B), page: (_) => const ArIntroPage()),
     ];
+    final role = UserRoleStore.current;
+
     final cityServices = <_Feature>[
-      _Feature('Announcements', Icons.campaign_rounded,
-          color: const Color(0xFF00838F),
-          page: (_) => const AnnouncementsPage()),
+      // Official city announcements are aimed at residents, so they are
+      // shown to Mandaleños (and staff) rather than visiting tourists.
+      if (role == UserRole.mandaleno)
+        _Feature('Announcements', Icons.campaign_rounded,
+            color: const Color(0xFF00838F),
+            page: (_) => const AnnouncementsPage()),
       _Feature('News', Icons.newspaper_rounded,
           color: const Color(0xFF3949AB), page: (_) => const NewsPage()),
       _Feature('Events', Icons.event_rounded,
@@ -795,15 +834,19 @@ class ServicesGridPage extends StatelessWidget {
           page: (_) => const ReportConcernPage()),
       _Feature('Feedback', Icons.rate_review_rounded,
           color: const Color(0xFF00838F), page: (_) => const FeedbackPage()),
-      _Feature('Analytics', Icons.insights_rounded,
-          color: const Color(0xFF5E35B1),
-          page: (_) => const AnalyticsDashboardPage()),
-      _Feature('Accreditation', Icons.verified_outlined,
-          color: const Color(0xFF00695C),
-          page: (_) => const AccreditationPage()),
+      // Business accreditation is for local establishment owners, so it is
+      // offered to Mandaleños only. (Analytics is a CCAT staff tool and is
+      // not shown to visitors at all.)
+      if (role == UserRole.mandaleno) ...[
+        _Feature('Accreditation', Icons.verified_outlined,
+            color: const Color(0xFF00695C),
+            page: (_) => const AccreditationPage()),
+        _Feature('Request Event', Icons.add_circle_outline,
+            color: const Color(0xFF5E35B1),
+            page: (_) => const EventRequestPage()),
+      ],
     ];
 
-    final role = UserRoleStore.current;
     final first = role == UserRole.mandaleno ? cityServices : explore;
     final second = role == UserRole.mandaleno ? explore : cityServices;
     final firstTitle = role.primarySectionTitle;
@@ -962,61 +1005,118 @@ class _AdminHomeViewState extends State<_AdminHomeView> {
       child: ListView(
         padding: const EdgeInsets.all(AppSpacing.l),
         children: [
-          // ---- Identity bar ----
+          // ---- Administrator header ----
           _Reveal(
             delayMs: 0,
             child: Container(
-              padding: const EdgeInsets.all(AppSpacing.l),
+              padding: const EdgeInsets.all(AppSpacing.xl),
               decoration: BoxDecoration(
-                color: colors.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                border: Border(
-                  left: BorderSide(color: AppTheme.brandGold, width: 4),
-                  top: BorderSide(color: colors.outlineVariant),
-                  right: BorderSide(color: colors.outlineVariant),
-                  bottom: BorderSide(color: colors.outlineVariant),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
                 ),
+                borderRadius: BorderRadius.circular(AppRadius.xl),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF12305F).withValues(alpha: 0.22),
+                    blurRadius: 14,
+                    offset: const Offset(0, 5),
+                  ),
+                ],
               ),
-              child: Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 46,
+                        height: 46,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.15),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                              color: AppTheme.brandGold.withValues(alpha: 0.7),
+                              width: 1.5),
+                        ),
+                        child: const Icon(Icons.account_balance_rounded,
+                            color: Colors.white, size: 22),
+                      ),
+                      const SizedBox(width: AppSpacing.m),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'CCAT ADMINISTRATOR',
+                              style: text.labelSmall?.copyWith(
+                                color: AppTheme.brandGold,
+                                letterSpacing: 1.2,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              (name == null || name.trim().isEmpty)
+                                  ? 'Administrator'
+                                  : name.trim(),
+                              style: text.titleLarge?.copyWith(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.l),
                   Container(
                     width: 44,
-                    height: 44,
+                    height: 3,
                     decoration: BoxDecoration(
-                      color: colors.primary,
-                      borderRadius: BorderRadius.circular(AppRadius.sm),
+                      color: AppTheme.brandGold,
+                      borderRadius: BorderRadius.circular(99),
                     ),
-                    child: const Icon(Icons.account_balance_rounded,
-                        color: Colors.white, size: 22),
                   ),
-                  const SizedBox(width: AppSpacing.m),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'CITY CULTURAL AFFAIRS & TOURISM',
-                          style: text.labelSmall?.copyWith(
-                            color: colors.outline,
-                            letterSpacing: 0.8,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          name == null || name.trim().isEmpty
-                              ? 'Administrator'
-                              : name.trim(),
-                          style: text.titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        Text(
+                  const SizedBox(height: AppSpacing.m),
+                  Row(
+                    children: [
+                      Icon(Icons.event_note_outlined,
+                          size: 15,
+                          color: Colors.white.withValues(alpha: 0.75)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
                           '$greeting · ${_today()}',
-                          style: text.bodySmall
-                              ?.copyWith(color: colors.outline),
+                          style: text.bodySmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85)),
                         ),
-                      ],
-                    ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(Icons.task_alt,
+                          size: 15,
+                          color: Colors.white.withValues(alpha: 0.75)),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _pending == null
+                              ? 'Loading pending work…'
+                              : (_pending == 0
+                                  ? 'No applications waiting — all caught up'
+                                  : '$_pending application'
+                                      '${_pending == 1 ? '' : 's'} awaiting '
+                                      'your decision'),
+                          style: text.bodySmall?.copyWith(
+                              color: Colors.white.withValues(alpha: 0.85)),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -1140,25 +1240,10 @@ class _AdminHomeViewState extends State<_AdminHomeView> {
                   ),
                   Divider(height: 1, color: colors.outlineVariant),
                   _ModuleRow(
-                    icon: Icons.campaign_outlined,
-                    title: 'Public announcements',
-                    subtitle: 'Publish advisories to all app users',
-                    onTap: () => _open(const AnnouncementsPage()),
-                  ),
-                  Divider(height: 1, color: colors.outlineVariant),
-                  _ModuleRow(
-                    icon: Icons.verified_outlined,
-                    title: 'Business accreditation',
-                    subtitle: 'Tourism establishment compliance',
-                    onTap: () => _open(const AccreditationPage()),
-                  ),
-                  Divider(height: 1, color: colors.outlineVariant),
-                  _ModuleRow(
-                    icon: Icons.emergency_outlined,
-                    title: 'Emergency directory',
-                    subtitle: 'City hotlines and rescue services',
-                    color: const Color(0xFFD32F2F),
-                    onTap: () => _open(const EmergencyPage()),
+                    icon: Icons.science_outlined,
+                    title: 'Model accuracy report',
+                    subtitle: 'How the sentiment classifier performs',
+                    onTap: () => _open(const SentimentEvalPage()),
                   ),
                 ],
               ),
@@ -1273,20 +1358,18 @@ class _ModuleRow extends StatelessWidget {
     required this.title,
     required this.subtitle,
     required this.onTap,
-    this.color,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
   final VoidCallback onTap;
-  final Color? color;
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
-    final accent = color ?? colors.primary;
+    final accent = colors.primary;
 
     return InkWell(
       onTap: onTap,

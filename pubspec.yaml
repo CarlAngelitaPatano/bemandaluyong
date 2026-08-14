@@ -53,6 +53,7 @@ dependencies:
   google_mlkit_face_detection: ^0.13.1
   webview_flutter: ^4.10.0
   cloud_firestore: ^6.0.3
+  pdf: ^3.11.1
 
 dev_dependencies:
   flutter_test:

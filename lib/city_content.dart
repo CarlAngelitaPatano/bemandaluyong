@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'theme.dart'; // design tokens (AppSpacing, AppRadius)
+import 'theme.dart';
+import 'events_manager.dart'; // events published by CCAT staff // design tokens (AppSpacing, AppRadius)
 
 /// A generic content item used for News, Services, Events, and Attractions.
 class CityItem {
@@ -850,6 +851,98 @@ const List<(String, int)> kEventMonths = [
   ('December', 2),
 ];
 
+/// Events created by CCAT staff in the app. Shown above the printed 2026
+/// calendar so newly announced activities appear immediately.
+class _StaffPublishedEvents extends StatelessWidget {
+  const _StaffPublishedEvents();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return StreamBuilder<List<CityEvent>>(
+      stream: EventsService.stream(),
+      builder: (context, snap) {
+        final events = (snap.data ?? [])
+            .where((e) => e.status != EventStatus.cancelled)
+            .toList();
+        if (events.isEmpty) return const SizedBox.shrink();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 5,
+                  height: 22,
+                  decoration: BoxDecoration(
+                    color: AppTheme.brandGold,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.m),
+                Text('Newly announced',
+                    style: text.titleMedium
+                        ?.copyWith(color: colors.primary)),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.m),
+            for (final e in events)
+              Card(
+                margin: const EdgeInsets.only(bottom: AppSpacing.m),
+                child: Padding(
+                  padding: const EdgeInsets.all(AppSpacing.l),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(e.title,
+                                style: text.titleSmall
+                                    ?.copyWith(fontWeight: FontWeight.w700)),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 9, vertical: 3),
+                            decoration: BoxDecoration(
+                              color:
+                                  e.status.color.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(99),
+                            ),
+                            child: Text(e.status.label,
+                                style: TextStyle(
+                                    color: e.status.color,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w700)),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text(e.dateLabel,
+                          style: text.bodySmall
+                              ?.copyWith(color: colors.outline)),
+                      if (e.venue.isNotEmpty)
+                        Text(e.venue,
+                            style: text.bodySmall
+                                ?.copyWith(color: colors.outline)),
+                      if (e.description.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.s),
+                        Text(e.description, style: text.bodyMedium),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 class EventsPage extends StatelessWidget {
   const EventsPage({super.key});
 
@@ -881,6 +974,9 @@ class EventsPage extends StatelessWidget {
           ],
         ),
       ),
+      // ---- Events published by CCAT staff (live from the database) ----
+      const SizedBox(height: AppSpacing.l),
+      const _StaffPublishedEvents(),
     ];
 
     // Build month sections by slicing kEvents in order.

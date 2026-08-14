@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'user_profile.dart';
+
 // ===========================================================================
 // Cross-platform account sync.
 //
@@ -52,6 +54,9 @@ class CloudSync {
         'displayName': user?.displayName ?? '',
         'email': user?.email ?? '',
         'userType': userType,
+        if (UserProfileStore.birthDate != null)
+          'birthDate': UserProfileStore.birthDate!.toIso8601String(),
+        if (UserProfileStore.age != null) 'age': UserProfileStore.age,
         'visitedChurches': visited.toList(),
         'visitedCount': visited.length,
         'trailCompleted': complete,

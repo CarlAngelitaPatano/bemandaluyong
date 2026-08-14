@@ -40,7 +40,7 @@ Future<void> showBadgeUnlocked(BuildContext context, TrailBadge badge) {
         backgroundColor: colors.tertiaryContainer,
         child: Icon(badge.icon, size: 36, color: colors.onTertiaryContainer),
       ),
-      title: const Text('Badge unlocked! 🎉'),
+      title: const Text('Badge unlocked!'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

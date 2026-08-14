@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'main.dart'; // for HomeShell (the screen shown after login)
 import 'user_role.dart'; // Tourist / Mandaleño
+import 'user_profile.dart'; // date of birth / trail age requirement
 import 'admin_panel.dart'; // kAdminEmail (built-in CCAT administrator)
 import 'theme.dart'; // light theme for the auth screens
 import 'phone_signin.dart'; // phone number / SMS sign-in
@@ -162,32 +163,35 @@ class _AuthBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      extendBodyBehindAppBar: true,
-      appBar: AppBar(
-        title: Text(title),
-        backgroundColor: const Color(0xFF0038A8),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        titleTextStyle: const TextStyle(
-          color: Colors.white,
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFDDE9FB), Color(0xFFF7FAFF)],
+    // The light theme wraps the WHOLE Scaffold — not just the body — so the
+    // default text colour, icons and form fields all resolve against it.
+    // (Wrapping only the body left plain Text widgets inheriting the dark
+    // theme's near-white colour, which vanished on this light gradient.)
+    return Theme(
+      data: AppTheme.light(),
+      child: Scaffold(
+        extendBodyBehindAppBar: true,
+        appBar: AppBar(
+          title: Text(title),
+          backgroundColor: const Color(0xFF0038A8),
+          foregroundColor: Colors.white,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          titleTextStyle: const TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
           ),
         ),
-        child: SafeArea(
-          // Force the light theme so text stays dark and readable on the light
-          // gradient even when the phone is in dark mode.
-          child: Theme(data: AppTheme.light(), child: child),
+        body: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Color(0xFFDDE9FB), Color(0xFFF7FAFF)],
+            ),
+          ),
+          child: SafeArea(child: child),
         ),
       ),
     );
@@ -498,8 +502,8 @@ class _LoginPageState extends State<LoginPage> {
       final user = FirebaseAuth.instance.currentUser;
       final email = user?.email?.toLowerCase();
       final isDemo = email == kDemoEmail;
-      // The built-in CCAT administrator is also exempt (demo/presentation).
-      final isBuiltInStaff = email == kAdminEmail;
+      // The built-in CCAT accounts are also exempt (demo/presentation).
+      final isBuiltInStaff = email == kAdminEmail || email == kStaffEmail;
 
       // Block sign-in until the email is verified (demo accounts are exempt).
       if (user != null &&
@@ -554,8 +558,9 @@ class _LoginPageState extends State<LoginPage> {
         await prefs.remove('saved_email');
       }
 
-      // Load this account's role so the dashboard shows the right content.
+      // Load this account's role and date of birth.
       await UserRoleStore.load();
+      await UserProfileStore.load();
 
       if (isDemo) {
         // Demo account: unlock the whole trail so every feature is showcased
@@ -595,11 +600,15 @@ class _LoginPageState extends State<LoginPage> {
           children: [
             Center(child: _sealLogo(88)),
             const SizedBox(height: 20),
+            // Explicit dark colour: these auth screens always use the light
+            // gradient background, even when the phone is in dark mode.
             Text(
               'Welcome back',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.headlineSmall
-                  ?.copyWith(fontWeight: FontWeight.bold),
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.bold,
+                    color: const Color(0xFF12305F),
+                  ),
             ),
             const SizedBox(height: 4),
             const Center(child: Text('Sign in to your account')),
@@ -733,6 +742,31 @@ class _RegisterPageState extends State<RegisterPage> {
   bool _obscure = true;
   bool _loading = false;
   UserRole _role = UserRole.tourist; // Tourist by default
+  DateTime? _birthDate; // required — used for the trail age check
+  bool _birthTouched = false; // show the error only after a submit attempt
+
+  /// Opens the calendar picker for the user's date of birth.
+  Future<void> _pickBirthDate() async {
+    final now = DateTime.now();
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _birthDate ?? DateTime(now.year - 20, now.month, now.day),
+      firstDate: DateTime(1920),
+      lastDate: now,
+      helpText: 'Select your date of birth',
+    );
+    if (picked != null) setState(() => _birthDate = picked);
+  }
+
+  String get _birthLabel {
+    final d = _birthDate;
+    if (d == null) return 'Select your date of birth';
+    const months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return '${d.day} ${months[d.month - 1]} ${d.year}';
+  }
 
   @override
   void dispose() {
@@ -744,7 +778,14 @@ class _RegisterPageState extends State<RegisterPage> {
   }
 
   Future<void> _register() async {
+    setState(() => _birthTouched = true);
     if (!_formKey.currentState!.validate()) return;
+    if (_birthDate == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select your date of birth.')),
+      );
+      return;
+    }
     setState(() => _loading = true);
     try {
       final cred = await FirebaseAuth.instance.createUserWithEmailAndPassword(
@@ -755,6 +796,8 @@ class _RegisterPageState extends State<RegisterPage> {
       // Remember whether they're a Tourist or a Mandaleño (saved per account
       // while they're still signed in, so the dashboard adapts on first login).
       await UserRoleStore.save(_role);
+      // Date of birth — drives the Heritage Church Trail age requirement.
+      await UserProfileStore.save(_birthDate!);
       // Send a verification link to prove the email is real & owned by them.
       await cred.user?.sendEmailVerification();
       // Keep them signed out until they verify.
@@ -797,7 +840,10 @@ class _RegisterPageState extends State<RegisterPage> {
   Widget build(BuildContext context) {
     return _AuthBackground(
       title: 'Create Account',
-      child: Form(
+      // Builder so every Theme.of(context) below resolves against the forced
+      // light theme of _AuthBackground — otherwise, with the phone in dark
+      // mode, these styles would come out light-on-light and be unreadable.
+      child: Builder(builder: (context) => Form(
         key: _formKey,
         child: ListView(
           padding: const EdgeInsets.fromLTRB(24, kToolbarHeight + 8, 24, 24),
@@ -807,7 +853,10 @@ class _RegisterPageState extends State<RegisterPage> {
             Center(
               child: Text(
                 'Create your account',
-                style: Theme.of(context).textTheme.titleLarge,
+                style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: const Color(0xFF12305F),
+                    ),
               ),
             ),
             const SizedBox(height: 20),
@@ -815,10 +864,10 @@ class _RegisterPageState extends State<RegisterPage> {
             // ---- Who's signing up? Tourist or Mandaleño ----
             Text(
               'I am a…',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleSmall
-                  ?.copyWith(fontWeight: FontWeight.w700),
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFF12305F),
+                  ),
             ),
             const SizedBox(height: 8),
             RoleOptionCard(
@@ -844,6 +893,64 @@ class _RegisterPageState extends State<RegisterPage> {
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? 'Please enter your name' : null,
             ),
+            const SizedBox(height: 16),
+
+            // ---- Date of birth (used for the Heritage Trail age check) ----
+            InkWell(
+              onTap: _pickBirthDate,
+              borderRadius: BorderRadius.circular(4),
+              child: InputDecorator(
+                decoration: InputDecoration(
+                  labelText: 'Date of birth',
+                  prefixIcon: const Icon(Icons.cake_outlined),
+                  border: const OutlineInputBorder(),
+                  suffixIcon: const Icon(Icons.calendar_today, size: 18),
+                  errorText: _birthDate == null && _birthTouched
+                      ? 'Please select your date of birth'
+                      : null,
+                ),
+                child: Text(
+                  _birthLabel,
+                  style: TextStyle(
+                    color: _birthDate == null
+                        ? const Color(0xFF6B7280) // grey hint
+                        : const Color(0xFF1F2937), // dark text
+                    fontWeight: _birthDate == null
+                        ? FontWeight.normal
+                        : FontWeight.w500,
+                  ),
+                ),
+              ),
+            ),
+            if (_birthDate != null) ...[
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Icon(
+                    UserProfileStore.ageFrom(_birthDate)! >= kMinimumTrailAge
+                        ? Icons.check_circle_outline
+                        : Icons.info_outline,
+                    size: 15,
+                    color: const Color(0xFF6B7280),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      UserProfileStore.ageFrom(_birthDate)! >= kMinimumTrailAge
+                          ? 'Age ${UserProfileStore.ageFrom(_birthDate)} — '
+                              'eligible for the Heritage Church Trail'
+                          : 'Age ${UserProfileStore.ageFrom(_birthDate)} — you '
+                              'can use the app, but the Heritage Church Trail '
+                              'is for ages $kMinimumTrailAge and above',
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodySmall
+                          ?.copyWith(color: const Color(0xFF4B5563)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 16),
 
             TextFormField(
@@ -912,6 +1019,7 @@ class _RegisterPageState extends State<RegisterPage> {
             const GoogleButton(label: 'Sign up with Google'),
           ],
         ),
+      ),
       ),
     );
   }

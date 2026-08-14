@@ -61,6 +61,7 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
         message: text,
         rating: (m[FeedbackSchema.fRating] as num?)?.toInt() ?? 0,
         category: (m[FeedbackSchema.fCategory] ?? 'Other').toString(),
+        subject: (m[FeedbackSchema.fSubject] ?? '').toString(),
         name: (m[FeedbackSchema.fName] ?? 'Anonymous').toString(),
         source: (m[FeedbackSchema.fSource] ?? '').toString(),
         sentiment: sentiment,
@@ -329,10 +330,32 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
                           Text(e.message, style: text.bodyMedium),
                           const SizedBox(height: 4),
                           Text(
-                            '${e.name} · ${e.category}',
+                            [e.name, e.category]
+                                .where((s) => s.isNotEmpty)
+                                .join(' · '),
                             style: text.labelSmall
                                 ?.copyWith(color: colors.outline),
                           ),
+                          // The exact place named by the visitor, if any.
+                          if (e.subject.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Icon(Icons.place_outlined,
+                                    size: 13, color: colors.primary),
+                                const SizedBox(width: 4),
+                                Expanded(
+                                  child: Text(
+                                    e.subject,
+                                    style: text.labelSmall?.copyWith(
+                                      color: colors.primary,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ],
                       ),
                     ),
@@ -353,6 +376,7 @@ class _Entry {
   final String message;
   final int rating;
   final String category;
+  final String subject; // specific church / attraction / establishment
   final String name;
   final String source;
   final Sentiment sentiment;
@@ -362,6 +386,7 @@ class _Entry {
     required this.message,
     required this.rating,
     required this.category,
+    required this.subject,
     required this.name,
     required this.source,
     required this.sentiment,
