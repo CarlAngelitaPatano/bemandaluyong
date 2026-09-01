@@ -1,12 +1,11 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
 import 'motion.dart';
 import 'user_role.dart';
-import 'sentiment.dart'; // on-device NLP classification
 import 'content_filter.dart'; // profanity / threat / spam screening
+import 'tcims_api.dart'; // shared TCIMS backend (MySQL) — feedback + sentiment
 import 'heritage.dart'; // kChurches
 import 'attractions.dart'; // kAttractions
 import 'dining.dart'; // kEateries
@@ -145,29 +144,41 @@ class _FeedbackPageState extends State<FeedbackPage> {
     setState(() => _sending = true);
     try {
       final user = FirebaseAuth.instance.currentUser;
-      // ---- NLP: classify the comment before it is stored ----
-      final analysis = SentimentAnalyzer.analyze(_message.text.trim());
-      final sentiment = SentimentAnalyzer.analyzeWithRating(
-          _message.text.trim(), _rating);
-      await FirebaseFirestore.instance
-          .collection(FeedbackSchema.collection)
-          .add({
-        FeedbackSchema.fMessage: _message.text.trim(),
-        FeedbackSchema.fRating: _rating,
-        FeedbackSchema.fCategory: _category,
-        FeedbackSchema.fSubject: _subject ?? '',
-        FeedbackSchema.fName: _anonymous
-            ? 'Anonymous'
-            : (user?.displayName ?? 'Anonymous'),
-        FeedbackSchema.fEmail: _anonymous ? '' : (user?.email ?? ''),
-        FeedbackSchema.fUserId: user?.uid ?? '',
-        FeedbackSchema.fUserType: UserRoleStore.current.label,
-        FeedbackSchema.fSource: 'mobile',
-        // Classified on-device by the app's NLP sentiment analyser.
-        FeedbackSchema.fSentiment: sentiment.id,
-        FeedbackSchema.fSentimentScore: analysis.score,
-        FeedbackSchema.fCreatedAt: FieldValue.serverTimestamp(),
+      // The specific church/attraction if one was chosen, otherwise the
+      // category — api/feedback.php requires a non-empty "place".
+      final place = (_subject != null && _subject!.isNotEmpty)
+          ? _subject!
+          : _category;
+      final reviewerName = _anonymous
+          ? 'Anonymous'
+          : (user?.displayName ?? user?.email ?? UserRoleStore.current.label);
+
+      // The RAW comment is sent — the SERVER classifies it, using the same
+      // lexicon the website uses, so the app and the web can never disagree
+      // about a review's sentiment. No sentiment value is sent from here.
+      final result = await TcimsApi.post('/api/feedback.php', {
+        'place': place,
+        'rating': _rating,
+        'comment': _message.text.trim(),
+        'reviewer': reviewerName,
       });
+
+      if (result == null || result['success'] != true) {
+        if (!mounted) return;
+        final serverError = (result is Map) ? result['error'] as String? : null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(serverError ??
+                'Could not send your feedback. Check your internet '
+                    'connection and try again.'),
+          ),
+        );
+        return;
+      }
+
+      // The server returns "Positive" / "Neutral" / "Negative" — this is the
+      // official classification, shown as-is.
+      final officialSentiment = (result['sentiment'] as String?) ?? 'Neutral';
 
       if (!mounted) return;
       await showDialog(
@@ -176,10 +187,10 @@ class _FeedbackPageState extends State<FeedbackPage> {
           icon: const Icon(Icons.check_circle_outline,
               color: AppTheme.brandGold, size: 44),
           title: const Text('Thank you!'),
-          content: const Text(
+          content: Text(
             'Your feedback has been sent to the City Cultural Affairs and '
-            'Tourism office. It helps them improve the city\'s services and '
-            'heritage programs.',
+            'Tourism office (classified as $officialSentiment). It helps '
+            'them improve the city\'s services and heritage programs.',
           ),
           actions: [
             FilledButton(

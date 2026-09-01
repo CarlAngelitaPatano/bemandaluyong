@@ -32,12 +32,12 @@ import 'itinerary.dart'; // suggested itineraries
 import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
 import 'analytics_dashboard.dart'; // sentiment analytics dashboard
 import 'accreditation.dart'; // policy management / accreditation
-import 'admin_panel.dart'; // CCAT admin console
+import 'staff_access.dart'; // CCAT admin console
 import 'staff_panel.dart'; // CCAT staff console
 import 'events_manager.dart'; // staff event management
 import 'event_requests.dart'; // resident event proposals
 import 'sentiment_eval.dart'; // NLP accuracy report
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'tcims_api.dart'; // shared TCIMS backend (MySQL) — auth + trail sync
 
 void main() async {
   // Required before any async work in main().
@@ -130,15 +130,7 @@ class _HomeShellState extends State<HomeShell> {
     ProfilePage(),
   ];
 
-  // Full administrators
-  static const List<Widget> _adminPages = <Widget>[
-    HomePage(), // renders the admin dashboard
-    AdminPanelView(),
-    AnalyticsDashboardPage(embedded: true),
-    ProfilePage(),
-  ];
-
-  // Staff tier — events, announcements and feedback
+  // CCAT staff — events, announcements and feedback
   static const List<Widget> _staffPages = <Widget>[
     HomePage(), // renders the staff dashboard
     EventsManagerPage(embedded: true),
@@ -146,11 +138,8 @@ class _HomeShellState extends State<HomeShell> {
     ProfilePage(),
   ];
 
-  List<Widget> get _pages => switch (StaffAccess.role) {
-        CcatRole.admin => _adminPages,
-        CcatRole.staff => _staffPages,
-        CcatRole.none => _visitorPages,
-      };
+  List<Widget> get _pages =>
+      StaffAccess.isStaff ? _staffPages : _visitorPages;
 
   @override
   void initState() {
@@ -158,11 +147,21 @@ class _HomeShellState extends State<HomeShell> {
     // Demo account: keep the whole trail unlocked (also covers app restarts
     // where the demo session is still signed in). Real accounts reload their
     // actual saved progress, clearing any leftover demo unlock.
+    // Refresh the TCIMS api_token whenever the home screen loads — not just
+    // right after an explicit login, but also on a "remembered session" cold
+    // start, where main() skips the login screen entirely. Chained (rather
+    // than awaited separately) so the sync calls below can't race ahead of
+    // the token being saved.
+    final tokenReady = TcimsApi.exchangeFirebaseToken();
+
     if (FirebaseAuth.instance.currentUser?.email?.toLowerCase() == kDemoEmail) {
-      TrailProgress.unlockAll(); // also syncs to the shared account
+      // Demo account: keep the whole trail unlocked, and record it on the
+      // shared backend so the website matches.
+      tokenReady.then((_) => TrailProgress.unlockAll());
     } else {
       // Load local progress, then merge with the shared account (website).
-      TrailProgress.load()
+      tokenReady
+          .then((_) => TrailProgress.load())
           .then((_) => TrailProgress.syncWithCloud())
           .then((_) {
         if (mounted) setState(() {});
@@ -264,11 +263,8 @@ class _HomeShellState extends State<HomeShell> {
             ),
           ),
         ),
-        title: Text(switch (StaffAccess.role) {
-          CcatRole.admin => 'CCAT Administration',
-          CcatRole.staff => 'CCAT Staff',
-          CcatRole.none => 'Be@Mandaluyong',
-        }),
+        title:
+            Text(StaffAccess.isStaff ? 'CCAT Staff' : 'Be@Mandaluyong'),
         actions: [
           // Visitor search isn't useful to staff — they get the accuracy
           // report instead.
@@ -308,16 +304,7 @@ class _HomeShellState extends State<HomeShell> {
               icon: Icon(Icons.home_outlined),
               selectedIcon: Icon(Icons.home),
               label: 'Home'),
-          if (StaffAccess.isAdmin) ...[
-            const NavigationDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
-                label: 'Manage'),
-            const NavigationDestination(
-                icon: Icon(Icons.insights_outlined),
-                selectedIcon: Icon(Icons.insights),
-                label: 'Analytics'),
-          ] else if (StaffAccess.isStaffOnly) ...[
+          if (StaffAccess.isStaff) ...[
             const NavigationDestination(
                 icon: Icon(Icons.event_note_outlined),
                 selectedIcon: Icon(Icons.event_note),
@@ -362,9 +349,8 @@ class HomePage extends StatelessWidget {
         ? 'Good morning'
         : (hour < 18 ? 'Good afternoon' : 'Good evening');
 
-    // CCAT accounts get work-focused dashboards instead of the visitor one.
-    if (StaffAccess.isAdmin) return const _AdminHomeView();
-    if (StaffAccess.isStaffOnly) return const StaffHomeView();
+    // CCAT staff get a work-focused dashboard instead of the visitor one.
+    if (StaffAccess.isStaff) return const StaffHomeView();
 
     // Tourist or Mandaleño — decides the greeting and the "For you" card.
     // (All feature tiles live in the Services tab.)
@@ -938,475 +924,6 @@ String _headline(UserRole role, int hour) {
     return 'The city is waiting — heritage, food, and places to discover.';
   }
   return 'Explore the heritage, culture, and services of Mandaluyong City.';
-}
-
-// ===========================================================================
-// Admin home — the dashboard CCAT staff see instead of the visitor screen.
-// Work first: what needs attention, then quick actions. No trail progress,
-// featured churches or itineraries — those are visitor features.
-// ===========================================================================
-class _AdminHomeView extends StatefulWidget {
-  const _AdminHomeView();
-
-  @override
-  State<_AdminHomeView> createState() => _AdminHomeViewState();
-}
-
-class _AdminHomeViewState extends State<_AdminHomeView> {
-  int? _pending;
-  int? _feedback;
-  int? _users;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadCounts();
-  }
-
-  Future<void> _loadCounts() async {
-    try {
-      final db = FirebaseFirestore.instance;
-      final results = await Future.wait([
-        db.collection(kAccreditationCollection).get(),
-        db.collection('feedback').get(),
-        db.collection('users').get(),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _pending = results[0]
-            .docs
-            .where((d) => (d.data()['status'] ?? 'pending') == 'pending')
-            .length;
-        _feedback = results[1].docs.length;
-        _users = results[2].docs.length;
-      });
-    } catch (_) {
-      // Rules or connectivity — the tiles simply show a dash.
-    }
-  }
-
-  void _open(Widget page) {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => page))
-        .then((_) => _loadCounts());
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final name = FirebaseAuth.instance.currentUser?.displayName;
-    final hour = DateTime.now().hour;
-    final greeting = hour < 12
-        ? 'Good morning'
-        : (hour < 18 ? 'Good afternoon' : 'Good evening');
-
-    return RefreshIndicator(
-      onRefresh: _loadCounts,
-      child: ListView(
-        padding: const EdgeInsets.all(AppSpacing.l),
-        children: [
-          // ---- Administrator header ----
-          _Reveal(
-            delayMs: 0,
-            child: Container(
-              padding: const EdgeInsets.all(AppSpacing.xl),
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF12305F), Color(0xFF1E4B8F)],
-                ),
-                borderRadius: BorderRadius.circular(AppRadius.xl),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF12305F).withValues(alpha: 0.22),
-                    blurRadius: 14,
-                    offset: const Offset(0, 5),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 46,
-                        height: 46,
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: AppTheme.brandGold.withValues(alpha: 0.7),
-                              width: 1.5),
-                        ),
-                        child: const Icon(Icons.account_balance_rounded,
-                            color: Colors.white, size: 22),
-                      ),
-                      const SizedBox(width: AppSpacing.m),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'CCAT ADMINISTRATOR',
-                              style: text.labelSmall?.copyWith(
-                                color: AppTheme.brandGold,
-                                letterSpacing: 1.2,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              (name == null || name.trim().isEmpty)
-                                  ? 'Administrator'
-                                  : name.trim(),
-                              style: text.titleLarge?.copyWith(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: AppSpacing.l),
-                  Container(
-                    width: 44,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: AppTheme.brandGold,
-                      borderRadius: BorderRadius.circular(99),
-                    ),
-                  ),
-                  const SizedBox(height: AppSpacing.m),
-                  Row(
-                    children: [
-                      Icon(Icons.event_note_outlined,
-                          size: 15,
-                          color: Colors.white.withValues(alpha: 0.75)),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          '$greeting · ${_today()}',
-                          style: text.bodySmall?.copyWith(
-                              color: Colors.white.withValues(alpha: 0.85)),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Icon(Icons.task_alt,
-                          size: 15,
-                          color: Colors.white.withValues(alpha: 0.75)),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          _pending == null
-                              ? 'Loading pending work…'
-                              : (_pending == 0
-                                  ? 'No applications waiting — all caught up'
-                                  : '$_pending application'
-                                      '${_pending == 1 ? '' : 's'} awaiting '
-                                      'your decision'),
-                          style: text.bodySmall?.copyWith(
-                              color: Colors.white.withValues(alpha: 0.85)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.l),
-
-          // ---- Action-required banner ----
-          if ((_pending ?? 0) > 0)
-            _Reveal(
-              delayMs: 40,
-              child: Container(
-                margin: const EdgeInsets.only(bottom: AppSpacing.l),
-                padding: const EdgeInsets.all(AppSpacing.m),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEF6C00).withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(AppRadius.md),
-                  border: Border.all(
-                      color: const Color(0xFFEF6C00).withValues(alpha: 0.4)),
-                ),
-                child: Row(
-                  children: [
-                    const Icon(Icons.priority_high_rounded,
-                        color: Color(0xFFEF6C00), size: 20),
-                    const SizedBox(width: AppSpacing.s),
-                    Expanded(
-                      child: Text(
-                        '$_pending application${_pending == 1 ? '' : 's'} '
-                        'awaiting review',
-                        style: text.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w600,
-                            color: const Color(0xFFEF6C00)),
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () => _open(const AdminPanelPage()),
-                      child: const Text('Review'),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-
-          // ---- Key metrics ----
-          _Reveal(
-            delayMs: 60,
-            child: Text('KEY METRICS', style: _adminLabel(context)),
-          ),
-          const SizedBox(height: AppSpacing.m),
-          _Reveal(
-            delayMs: 90,
-            child: Row(
-              children: [
-                _AdminStat(
-                  label: 'Registered users',
-                  value: _users?.toString() ?? '—',
-                  icon: Icons.people_outline,
-                  onTap: () => _open(const AdminPanelPage()),
-                ),
-                const SizedBox(width: AppSpacing.m),
-                _AdminStat(
-                  label: 'Feedback received',
-                  value: _feedback?.toString() ?? '—',
-                  icon: Icons.forum_outlined,
-                  onTap: () => _open(const AnalyticsDashboardPage()),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: AppSpacing.m),
-          _Reveal(
-            delayMs: 120,
-            child: Row(
-              children: [
-                _AdminStat(
-                  label: 'Pending review',
-                  value: _pending?.toString() ?? '—',
-                  icon: Icons.pending_actions_outlined,
-                  highlight: (_pending ?? 0) > 0,
-                  onTap: () => _open(const AdminPanelPage()),
-                ),
-                const SizedBox(width: AppSpacing.m),
-                _AdminStat(
-                  label: 'NLP model report',
-                  value: 'View',
-                  icon: Icons.science_outlined,
-                  onTap: () => _open(const SentimentEvalPage()),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xxl),
-
-          // ---- Modules ----
-          _Reveal(
-            delayMs: 160,
-            child: Text('SYSTEM MODULES', style: _adminLabel(context)),
-          ),
-          const SizedBox(height: AppSpacing.m),
-          _Reveal(
-            delayMs: 190,
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(AppRadius.lg),
-                border: Border.all(color: colors.outlineVariant),
-              ),
-              child: Column(
-                children: [
-                  _ModuleRow(
-                    icon: Icons.dashboard_outlined,
-                    title: 'Administration',
-                    subtitle: 'Applications · announcements · user records',
-                    onTap: () => _open(const AdminPanelPage()),
-                  ),
-                  Divider(height: 1, color: colors.outlineVariant),
-                  _ModuleRow(
-                    icon: Icons.insights_outlined,
-                    title: 'Sentiment analytics',
-                    subtitle: 'Visitor feedback classified by NLP',
-                    onTap: () => _open(const AnalyticsDashboardPage()),
-                  ),
-                  Divider(height: 1, color: colors.outlineVariant),
-                  _ModuleRow(
-                    icon: Icons.science_outlined,
-                    title: 'Model accuracy report',
-                    subtitle: 'How the sentiment classifier performs',
-                    onTap: () => _open(const SentimentEvalPage()),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: AppSpacing.xl),
-
-          // ---- Footer ----
-          Center(
-            child: Text(
-              'Be@Mandaluyong · Administration Console',
-              style: text.labelSmall?.copyWith(color: colors.outline),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Small uppercase section label used across the admin console.
-TextStyle? _adminLabel(BuildContext context) =>
-    Theme.of(context).textTheme.labelSmall?.copyWith(
-          fontWeight: FontWeight.w800,
-          letterSpacing: 1.0,
-          color: Theme.of(context).colorScheme.outline,
-        );
-
-/// Today's date, e.g. "6 August 2026".
-String _today() {
-  const months = [
-    'January', 'February', 'March', 'April', 'May', 'June',
-    'July', 'August', 'September', 'October', 'November', 'December'
-  ];
-  final d = DateTime.now();
-  return '${d.day} ${months[d.month - 1]} ${d.year}';
-}
-
-/// A metric card in the admin console — flat, bordered, data-first.
-class _AdminStat extends StatelessWidget {
-  const _AdminStat({
-    required this.label,
-    required this.value,
-    required this.icon,
-    this.highlight = false,
-    this.onTap,
-  });
-
-  final String label;
-  final String value;
-  final IconData icon;
-  final bool highlight;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final accent = highlight ? const Color(0xFFEF6C00) : colors.primary;
-
-    return Expanded(
-      child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadius.md),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(AppSpacing.l),
-          decoration: BoxDecoration(
-            color: colors.surface,
-            borderRadius: BorderRadius.circular(AppRadius.md),
-            border: Border.all(
-              color: highlight
-                  ? accent.withValues(alpha: 0.55)
-                  : colors.outlineVariant,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(icon, color: accent, size: 18),
-                  const Spacer(),
-                  Icon(Icons.north_east_rounded,
-                      size: 13, color: colors.outlineVariant),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.m),
-              Text(value,
-                  style: text.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.w800,
-                      height: 1.0,
-                      color: highlight ? accent : colors.onSurface)),
-              const SizedBox(height: 4),
-              Text(label.toUpperCase(),
-                  style: text.labelSmall?.copyWith(
-                    color: colors.outline,
-                    letterSpacing: 0.5,
-                    fontWeight: FontWeight.w600,
-                  )),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A row in the "System modules" list.
-class _ModuleRow extends StatelessWidget {
-  const _ModuleRow({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final accent = colors.primary;
-
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.l, vertical: AppSpacing.m),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: accent.withValues(alpha: 0.10),
-                borderRadius: BorderRadius.circular(AppRadius.sm),
-              ),
-              child: Icon(icon, size: 19, color: accent),
-            ),
-            const SizedBox(width: AppSpacing.m),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title,
-                      style: text.bodyLarge
-                          ?.copyWith(fontWeight: FontWeight.w600)),
-                  Text(subtitle,
-                      style: text.bodySmall
-                          ?.copyWith(color: colors.outline)),
-                ],
-              ),
-            ),
-            Icon(Icons.chevron_right, color: colors.outlineVariant),
-          ],
-        ),
-      ),
-    );
-  }
 }
 
 /// Quiet, consistent section label used across the home screen.

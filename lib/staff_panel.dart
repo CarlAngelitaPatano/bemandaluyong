@@ -12,7 +12,7 @@ import 'analytics_dashboard.dart';
 import 'event_requests.dart';
 import 'staff_report.dart';
 import 'local_notifs.dart';
-import 'admin_panel.dart' show kAnnouncementPublisher;
+import 'staff_access.dart' show kAnnouncementPublisher;
 
 // ===========================================================================
 // CCAT Staff console.

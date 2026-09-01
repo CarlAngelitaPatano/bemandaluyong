@@ -16,8 +16,7 @@ import 'city_content.dart'; // for the shared LeadingThumb widget
 import 'theme.dart'; // design tokens (AppTheme.success, AppSpacing, AppRadius)
 import 'achievements.dart'; // trail badges + unlock celebration
 import 'motion.dart'; // Reveal / PopIn animations
-import 'cloud_sync.dart'; // shared account progress (app ↔ website)
-import 'user_role.dart'; // Tourist / Mandaleño
+import 'tcims_api.dart'; // shared TCIMS backend (MySQL) — trail check-ins
 import 'user_profile.dart'; // date of birth / minimum trail age
 
 /// A heritage church in Mandaluyong.
@@ -634,52 +633,71 @@ class TrailProgress {
   }
 
   /// Merges this device's progress with the account's progress in the shared
-  /// database, so the trail is the same on the app and the website.
-  /// Call after login (and at startup for a remembered session).
+  /// MySQL database (api/visits.php), so the trail is the same on the app and
+  /// the CCAT website. Call after login (and at startup for a remembered
+  /// session).
   static Future<void> syncWithCloud() async {
     // Pull anything verified on another platform (e.g. the website).
-    final remote = await CloudSync.fetchVisited();
-    if (remote != null && remote.isNotEmpty) {
+    final remoteRaw = await TcimsApi.get('/api/visits.php');
+    final remote =
+        (remoteRaw is List) ? remoteRaw.cast<String>().toSet() : <String>{};
+    if (remote.isNotEmpty) {
       final before = visited.length;
       visited.addAll(remote); // union — nothing is ever lost
       if (visited.length != before) await _save();
     }
-    // Push this device's progress up.
-    await CloudSync.pushProgress(
-      visited: visited,
-      totalChurches: kChurches.length,
-      userType: UserRoleStore.current.label,
-    );
+    // Push anything verified ONLY on this device (it has local photo proof
+    // but the server doesn't know about it — e.g. verified while offline).
+    // Best-effort: if the proof photos are gone from disk, that stop is
+    // skipped until it is re-verified.
+    for (final name in visited) {
+      if (remote.contains(name)) continue;
+      final photos = proofs[name];
+      if (photos == null || photos.length < 2) continue;
+      if (!await File(photos[0]).exists()) continue;
+      if (!await File(photos[1]).exists()) continue;
+      await TcimsApi.postMultipart(
+        '/api/checkin.php',
+        fields: {'place': name},
+        files: {'selfie': photos[0], 'site': photos[1]},
+      );
+    }
   }
 
   /// Marks a church verified once the required photo proof is provided,
-  /// saves it locally, and syncs it to the shared account.
+  /// saves it locally, and records the check-in (with photo proof) on the
+  /// shared backend — this is what makes it appear on the website too.
   static Future<void> markVerified(Church c, List<String> photoPaths) async {
     proofs[c.name] = photoPaths;
     visited.add(c.name);
     await _save();
-    // Make the new stop visible on the website too.
-    await CloudSync.pushProgress(
-      visited: visited,
-      totalChurches: kChurches.length,
-      userType: UserRoleStore.current.label,
-    );
+    if (photoPaths.length >= 2) {
+      await TcimsApi.postMultipart(
+        '/api/checkin.php',
+        fields: {'place': c.name},
+        files: {'selfie': photoPaths[0], 'site': photoPaths[1]},
+      );
+    }
   }
 
-  /// Pushes the current progress to the shared account (app ↔ website).
-  static Future<void> pushToCloud() => CloudSync.pushProgress(
-        visited: visited,
-        totalChurches: kChurches.length,
-        userType: UserRoleStore.current.label,
-      );
+  /// Re-syncs the current progress with the shared account (app ↔ website).
+  static Future<void> pushToCloud() => syncWithCloud();
 
   /// Unlocks the entire trail in memory (used by the demo account). Not saved
   /// to device storage, so it only lasts for the current session — but it IS
-  /// pushed to the shared database so the demo also looks complete when the
+  /// recorded on the shared database so the demo also looks complete when the
   /// same account is opened on the website.
   static Future<void> unlockAll() async {
     visited.addAll(kChurches.map((c) => c.name));
-    await pushToCloud();
+    final remoteRaw = await TcimsApi.get('/api/visits.php');
+    final remote =
+        (remoteRaw is List) ? remoteRaw.cast<String>().toSet() : <String>{};
+    for (final c in kChurches) {
+      // visits.php POST TOGGLES — only call it for places the server does not
+      // already have, or a second demo login would un-check them.
+      if (remote.contains(c.name)) continue;
+      await TcimsApi.post('/api/visits.php', {'place': c.name});
+    }
   }
 }
 
@@ -1017,8 +1035,14 @@ class _VerifyVisitPageState extends State<VerifyVisitPage> {
         source: ImageSource.camera, // live camera only — no gallery
         preferredCameraDevice:
             selfie ? CameraDevice.front : CameraDevice.rear,
-        maxWidth: 1280,
-        imageQuality: 80,
+        // Compression happens at capture time: the image is downscaled and
+        // re-encoded as JPEG before it ever reaches storage. 1024px is plenty
+        // for verifying a visit, and keeps each photo around 100–180 KB —
+        // important because every check-in stores two photos, and they are
+        // uploaded to the CCAT backend.
+        maxWidth: 1024,
+        maxHeight: 1024,
+        imageQuality: 70,
       );
       if (img == null) return;
       setState(() {

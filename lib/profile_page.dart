@@ -17,7 +17,7 @@ import 'face_check.dart'; // profile-photo face verification
 import 'avatars.dart'; // built-in avatar option
 import 'user_role.dart'; // Tourist / Mandaleño
 import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
-import 'admin_panel.dart'; // CCAT roles + admin console
+import 'staff_access.dart'; // CCAT roles + admin console
 import 'events_manager.dart'; // staff event management
 
 /// Loads/saves the current user's profile photo (stored on-device as base64,
@@ -488,9 +488,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 final badgeIcon = staff
                     ? Icons.admin_panel_settings_outlined
                     : _role.icon;
-                final badgeLabel = StaffAccess.isAdmin
-                    ? 'CCAT Administrator'
-                    : (staff ? 'CCAT Staff' : _role.label);
+                final badgeLabel = staff ? 'CCAT Staff' : _role.label;
                 return Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 12, vertical: 6),
@@ -656,20 +654,14 @@ class _ProfilePageState extends State<ProfilePage> {
                   child: Icon(Icons.admin_panel_settings_outlined,
                       color: colors.primary),
                 ),
-                title: Text(StaffAccess.isAdmin
-                    ? 'CCAT Admin Console'
-                    : 'CCAT Staff Console'),
-                subtitle: Text(StaffAccess.isAdmin
-                    ? 'Applications, announcements, user records'
-                    : 'Events, announcements, visitor feedback'),
+                title: const Text('CCAT Staff Console'),
+                subtitle:
+                    const Text('Events, announcements, visitor feedback'),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => StaffAccess.isAdmin
-                        ? const AdminPanelPage()
-                        : const EventsManagerPage(),
-                  ),
+                      builder: (_) => const EventsManagerPage()),
                 ),
               ),
             ),
