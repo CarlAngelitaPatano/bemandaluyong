@@ -7,8 +7,7 @@ import 'city_content.dart'; // EventsPage
 import 'news_page.dart'; // NewsPage
 import 'motion.dart'; // Reveal animation
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'admin_panel.dart'; // StaffAccess, AdminPanelPage
-import 'accreditation.dart'; // kAccreditationCollection, kRequirements
+import 'staff_access.dart'; // StaffAccess
 import 'event_requests.dart'; // kEventRequestCollection, review page
 import 'analytics_dashboard.dart'; // feedback analytics
 
@@ -20,15 +19,7 @@ import 'analytics_dashboard.dart'; // feedback analytics
 // ===========================================================================
 
 /// Where a notification takes the user when tapped.
-enum NotifAction {
-  none,
-  trail,
-  events,
-  news,
-  feedback,
-  eventRequests,
-  approvals,
-}
+enum NotifAction { none, trail, events, news, feedback, eventRequests }
 
 class AppNotification {
   final String id;
@@ -160,40 +151,8 @@ class NotificationService {
     return list;
   }
 
-  /// The administrator feed: only items waiting on an approve/decline
-  /// decision — accreditation applications submitted for review.
-  static Future<List<AppNotification>> buildForAdmin() async {
-    final list = <AppNotification>[];
-    try {
-      final snap = await FirebaseFirestore.instance
-          .collection(kAccreditationCollection)
-          .get();
-      for (final d in snap.docs) {
-        final m = d.data();
-        final status = (m['status'] ?? 'pending').toString();
-        // Only things still needing a decision.
-        if (status != 'pending' && status != 'under_review') continue;
-        final reqs = Map<String, dynamic>.from(m['requirements'] ?? {});
-        final met = reqs.values.where((v) => v == true).length;
-        list.add(AppNotification(
-          id: 'acc_${d.id}_$status',
-          title: 'Approval needed: ${m['businessName'] ?? 'Application'}',
-          body: '${m['businessType'] ?? 'Tourism business'} · '
-              '$met of ${kRequirements.length} requirements declared. '
-              'Tap to approve or decline.',
-          icon: Icons.assignment_turned_in_outlined,
-          action: NotifAction.approvals,
-        ));
-      }
-    } catch (_) {
-      // Offline or permissions — show an empty feed.
-    }
-    return list;
-  }
-
   /// The right feed for whoever is signed in.
   static Future<List<AppNotification>> buildFor() async {
-    if (StaffAccess.isAdmin) return buildForAdmin();
     if (StaffAccess.isStaff) return buildForStaff();
     return build();
   }
@@ -268,7 +227,6 @@ class _NotificationsPageState extends State<NotificationsPage> {
       NotifAction.news => const NewsPage(),
       NotifAction.feedback => const AnalyticsDashboardPage(),
       NotifAction.eventRequests => const EventRequestsReviewPage(),
-      NotifAction.approvals => const AdminPanelPage(),
       NotifAction.none => null,
     };
 

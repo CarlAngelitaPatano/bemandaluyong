@@ -7,7 +7,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'main.dart'; // for HomeShell (the screen shown after login)
 import 'user_role.dart'; // Tourist / Mandaleño
 import 'user_profile.dart'; // date of birth / trail age requirement
-import 'admin_panel.dart'; // kAdminEmail (built-in CCAT administrator)
+import 'staff_access.dart'; // kStaffEmail (built-in CCAT staff account)
+import 'tcims_api.dart'; // shared TCIMS backend — Firebase → api_token bridge
 import 'theme.dart'; // light theme for the auth screens
 import 'phone_signin.dart'; // phone number / SMS sign-in
 import 'heritage.dart'; // TrailProgress (demo unlock)
@@ -82,6 +83,8 @@ class _GoogleButtonState extends State<GoogleButton> {
       // Uses Firebase Auth's built-in federated flow (opens a secure browser
       // tab). No extra package needed.
       await FirebaseAuth.instance.signInWithProvider(GoogleAuthProvider());
+      // Bridge to the shared TCIMS backend (see LoginPage._login for why).
+      await TcimsApi.exchangeFirebaseToken();
       // Google sign-ins are remembered by default.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('remember_me', true);
@@ -454,7 +457,7 @@ class _RingPainter extends CustomPainter {
 }
 
 // ===========================================================================
-// 2) LOGIN  — used for both Resident and Admin (isAdmin switches the wording)
+// 2) LOGIN
 // ===========================================================================
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -502,8 +505,8 @@ class _LoginPageState extends State<LoginPage> {
       final user = FirebaseAuth.instance.currentUser;
       final email = user?.email?.toLowerCase();
       final isDemo = email == kDemoEmail;
-      // The built-in CCAT accounts are also exempt (demo/presentation).
-      final isBuiltInStaff = email == kAdminEmail || email == kStaffEmail;
+      // The built-in CCAT staff account is also exempt (demo/presentation).
+      final isBuiltInStaff = email == kStaffEmail;
 
       // Block sign-in until the email is verified (demo accounts are exempt).
       if (user != null &&
@@ -557,6 +560,12 @@ class _LoginPageState extends State<LoginPage> {
       } else {
         await prefs.remove('saved_email');
       }
+
+      // Bridge this Firebase sign-in to the shared TCIMS backend — the same
+      // MySQL database the CCAT website uses (feedback, trail check-ins,
+      // certificate). Best-effort: if it fails (offline, backend down) the
+      // app still works locally and simply won't sync this session.
+      await TcimsApi.exchangeFirebaseToken();
 
       // Load this account's role and date of birth.
       await UserRoleStore.load();

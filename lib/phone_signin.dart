@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'main.dart'; // HomeShell
+import 'tcims_api.dart'; // shared TCIMS backend — Firebase → api_token bridge
 import 'theme.dart';
 
 // ===========================================================================
@@ -39,6 +40,12 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
   }
 
   Future<void> _goHome() async {
+    // Bridge to the shared TCIMS backend. Known limitation: phone-only
+    // Firebase accounts have no email address, and firebase_login.php
+    // currently requires one — this call quietly fails for those accounts and
+    // the app falls back to local-only behaviour for that session (no crash,
+    // no blocked sign-in).
+    await TcimsApi.exchangeFirebaseToken();
     // Phone sign-ins are remembered by default.
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('remember_me', true);
