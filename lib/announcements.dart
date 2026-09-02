@@ -339,7 +339,7 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
                 child: Text(
                   'Published by the city government. You\'ll get a '
                   'notification whenever a new one is posted.',
-                  style: text.bodySmall?.copyWith(color: colors.outline),
+                  style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ),
               const SizedBox(height: AppSpacing.m),
@@ -383,7 +383,7 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
                           'appear here.',
                           textAlign: TextAlign.center,
                           style: text.bodySmall
-                              ?.copyWith(color: colors.outline),
+                              ?.copyWith(color: colors.onSurfaceVariant),
                         ),
                       ],
                     ),
@@ -434,7 +434,7 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
                                 const Spacer(),
                                 Text(_ago(items[i].publishedAt),
                                     style: text.labelSmall
-                                        ?.copyWith(color: colors.outline)),
+                                        ?.copyWith(color: colors.onSurfaceVariant)),
                               ],
                             ),
                             const SizedBox(height: AppSpacing.s),
@@ -446,7 +446,7 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
                             const SizedBox(height: AppSpacing.s),
                             Text(items[i].author,
                                 style: text.labelSmall
-                                    ?.copyWith(color: colors.outline)),
+                                    ?.copyWith(color: colors.onSurfaceVariant)),
                           ],
                         ),
                       ),

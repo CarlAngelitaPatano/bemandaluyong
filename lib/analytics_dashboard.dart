@@ -149,7 +149,7 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
                     'Once visitors start sending feedback, their sentiment '
                     'analysis appears here.',
                     textAlign: TextAlign.center,
-                    style: text.bodySmall?.copyWith(color: colors.outline),
+                    style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                   ),
                 ],
               );
@@ -209,7 +209,7 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
                   child: Text(
                     'Visitor comments classified automatically using natural '
                     'language processing.',
-                    style: text.bodySmall?.copyWith(color: colors.outline),
+                    style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.m),
@@ -323,7 +323,7 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
                               if (e.source.isNotEmpty)
                                 Text(e.source,
                                     style: text.labelSmall
-                                        ?.copyWith(color: colors.outline)),
+                                        ?.copyWith(color: colors.onSurfaceVariant)),
                             ],
                           ),
                           const SizedBox(height: AppSpacing.s),
@@ -334,7 +334,7 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
                                 .where((s) => s.isNotEmpty)
                                 .join(' · '),
                             style: text.labelSmall
-                                ?.copyWith(color: colors.outline),
+                                ?.copyWith(color: colors.onSurfaceVariant),
                           ),
                           // The exact place named by the visitor, if any.
                           if (e.subject.isNotEmpty) ...[
@@ -429,7 +429,7 @@ class _StatTile extends StatelessWidget {
                   color: valueColor,
                 )),
             Text(label,
-                style: text.bodySmall?.copyWith(color: colors.outline)),
+                style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
           ],
         ),
       ),

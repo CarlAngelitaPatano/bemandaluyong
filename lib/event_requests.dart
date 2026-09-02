@@ -229,7 +229,7 @@ class EventRequestPage extends StatelessWidget {
                   'Residents can suggest events for Mandaluyong — fiestas, '
                   'clean-up drives, sports leagues, cultural programs. CCAT '
                   'staff review each request and publish the approved ones.',
-                  style: text.bodyMedium?.copyWith(color: colors.outline),
+                  style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ),
               const SizedBox(height: AppSpacing.xl),
@@ -248,7 +248,7 @@ class EventRequestPage extends StatelessWidget {
                           'Tap "New request" to propose your first activity.',
                           textAlign: TextAlign.center,
                           style: text.bodySmall
-                              ?.copyWith(color: colors.outline),
+                              ?.copyWith(color: colors.onSurfaceVariant),
                         ),
                       ],
                     ),
@@ -317,10 +317,10 @@ class _RequestCard extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text('${request.dateLabel} · ${request.category}',
-                style: text.bodySmall?.copyWith(color: colors.outline)),
+                style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
             if (request.venue.isNotEmpty)
               Text(request.venue,
-                  style: text.bodySmall?.copyWith(color: colors.outline)),
+                  style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
             const SizedBox(height: AppSpacing.s),
             Text(request.description, style: text.bodyMedium),
             if (staffView) ...[
@@ -328,7 +328,7 @@ class _RequestCard extends StatelessWidget {
               Text(
                 'Requested by ${request.requestedByName}'
                 '${request.contact.isEmpty ? '' : ' · ${request.contact}'}',
-                style: text.labelSmall?.copyWith(color: colors.outline),
+                style: text.labelSmall?.copyWith(color: colors.onSurfaceVariant),
               ),
             ],
             if (request.staffNote.isNotEmpty) ...[

@@ -326,7 +326,7 @@ class _NotificationCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       notification.body,
-                      style: text.bodyMedium?.copyWith(color: colors.outline),
+                      style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                     ),
                   ],
                 ),

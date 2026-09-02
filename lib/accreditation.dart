@@ -172,7 +172,7 @@ class _AccreditationPageState extends State<AccreditationPage> {
                     'Apply for CCAT accreditation and track your compliance '
                     'requirements. Accredited businesses are listed in the '
                     'city\'s official tourism directory.',
-                    style: text.bodyMedium?.copyWith(color: colors.outline),
+                    style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
                   ),
                 ),
                 const SizedBox(height: AppSpacing.xl),
@@ -199,7 +199,7 @@ class _AccreditationPageState extends State<AccreditationPage> {
                             'accreditation.',
                             textAlign: TextAlign.center,
                             style: text.bodySmall
-                                ?.copyWith(color: colors.outline),
+                                ?.copyWith(color: colors.onSurfaceVariant),
                           ),
                         ],
                       ),
@@ -286,7 +286,7 @@ class _ApplicationCard extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(app.businessType,
-                style: text.bodySmall?.copyWith(color: colors.outline)),
+                style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
             const SizedBox(height: AppSpacing.m),
             Text('Compliance requirements: $met of ${kRequirements.length}',
                 style: text.bodySmall),

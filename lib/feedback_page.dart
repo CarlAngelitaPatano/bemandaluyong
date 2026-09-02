@@ -246,7 +246,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
               child: Text(
                 'Your feedback goes straight to the City Cultural Affairs and '
                 'Tourism office.',
-                style: text.bodyMedium?.copyWith(color: colors.outline),
+                style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
               ),
             ),
             const SizedBox(height: AppSpacing.xl),

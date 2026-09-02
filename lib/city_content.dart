@@ -594,7 +594,7 @@ class CityCard extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       item.meta,
-                      style: text.bodySmall?.copyWith(color: colors.outline),
+                      style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -686,7 +686,7 @@ class CityDetailPage extends StatelessWidget {
                   style: Theme.of(context)
                       .textTheme
                       .bodyMedium
-                      ?.copyWith(color: colors.outline),
+                      ?.copyWith(color: colors.onSurfaceVariant),
                 ),
               ),
             ],
@@ -851,6 +851,40 @@ const List<(String, int)> kEventMonths = [
   ('December', 2),
 ];
 
+/// The events falling in [month] (1 = January), read off the same ordered
+/// [kEvents] list and [kEventMonths] counts the calendar page uses.
+///
+/// Section labels can cover more than one month — "March – April" — so a label
+/// matches when the month appears anywhere in it, and a two-month section is
+/// returned for either of its months.
+List<CityItem> eventsInMonth(int month) {
+  const names = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  if (month < 1 || month > 12) return const [];
+  final wanted = names[month - 1];
+
+  var start = 0;
+  for (final (label, count) in kEventMonths) {
+    if (label.contains(wanted)) {
+      final end = (start + count).clamp(0, kEvents.length);
+      return kEvents.sublist(start.clamp(0, kEvents.length), end);
+    }
+    start += count;
+  }
+  return const [];
+}
+
+/// Full month name for [month] (1 = January), for headings.
+String monthName(int month) {
+  const names = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+  ];
+  return (month < 1 || month > 12) ? '' : names[month - 1];
+}
+
 /// Events created by CCAT staff in the app. Shown above the printed 2026
 /// calendar so newly announced activities appear immediately.
 class _StaffPublishedEvents extends StatelessWidget {
@@ -923,11 +957,11 @@ class _StaffPublishedEvents extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(e.dateLabel,
                           style: text.bodySmall
-                              ?.copyWith(color: colors.outline)),
+                              ?.copyWith(color: colors.onSurfaceVariant)),
                       if (e.venue.isNotEmpty)
                         Text(e.venue,
                             style: text.bodySmall
-                                ?.copyWith(color: colors.outline)),
+                                ?.copyWith(color: colors.onSurfaceVariant)),
                       if (e.description.isNotEmpty) ...[
                         const SizedBox(height: AppSpacing.s),
                         Text(e.description, style: text.bodyMedium),

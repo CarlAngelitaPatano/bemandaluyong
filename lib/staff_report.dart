@@ -497,7 +497,7 @@ class _StaffReportPageState extends State<StaffReportPage> {
                         'community requests and visitor feedback, then send it '
                         'to the administrator.',
                         style: text.bodyMedium
-                            ?.copyWith(color: colors.outline),
+                            ?.copyWith(color: colors.onSurfaceVariant),
                       ),
                     ),
                     const SizedBox(height: AppSpacing.xl),

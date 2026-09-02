@@ -56,6 +56,29 @@ class TcimsApi {
   static bool get isSignedIn => _cachedToken != null;
 
   // -------------------------------------------------------------------------
+  // Cold starts
+  // -------------------------------------------------------------------------
+
+  /// Nudges the backend awake without waiting for it.
+  ///
+  /// The free Render tier suspends the service after a period of inactivity,
+  /// and the first request afterwards has to wait for the container to boot —
+  /// long enough that a real submission can time out and look like a failure.
+  /// Calling this at launch means the boot happens while the person is still
+  /// finding their way around, so by the time they send feedback or verify a
+  /// church the service is already up.
+  ///
+  /// Deliberately fire-and-forget and unauthenticated: the reply does not
+  /// matter (a 401 wakes the container just as well as a 200), and nothing in
+  /// the app should ever be held up waiting for it.
+  static void warmUp() {
+    http
+        .get(Uri.parse('$baseUrl/api/visits.php'))
+        .timeout(const Duration(seconds: 60))
+        .then((_) {}, onError: (_) {});
+  }
+
+  // -------------------------------------------------------------------------
   // Auth bridge
   // -------------------------------------------------------------------------
 
@@ -139,7 +162,9 @@ class TcimsApi {
             headers: await _authHeaders(),
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 20));
+          // Generous enough to survive a container that is still finishing
+          // its boot when the person submits.
+          .timeout(const Duration(seconds: 35));
       if (res.statusCode == 401) {
         await clearToken();
         return null;
@@ -167,7 +192,8 @@ class TcimsApi {
       for (final entry in files.entries) {
         req.files.add(await http.MultipartFile.fromPath(entry.key, entry.value));
       }
-      final streamed = await req.send().timeout(const Duration(seconds: 30));
+      // Two photos over mobile data, possibly against a waking container.
+      final streamed = await req.send().timeout(const Duration(seconds: 50));
       final res = await http.Response.fromStream(streamed);
       if (res.statusCode == 401) {
         await clearToken();

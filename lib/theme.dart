@@ -184,13 +184,14 @@ class AppTheme {
             const EdgeInsets.symmetric(horizontal: AppSpacing.m, vertical: 6),
       ),
 
-      navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: scheme.surface,
+      // The footer is a notched BottomAppBar (the Services circle docks into
+      // it), not a NavigationBar — so its surface and lift are configured
+      // here and the footer widget reads them rather than hardcoding its own.
+      bottomAppBarTheme: BottomAppBarThemeData(
+        color: scheme.surface,
         elevation: 3,
-        height: 68,
-        indicatorColor: scheme.secondaryContainer,
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        labelTextStyle: WidgetStatePropertyAll(text.labelMedium),
+        shadowColor: Colors.black.withValues(alpha: 0.2),
+        padding: EdgeInsets.zero,
       ),
 
       listTileTheme: ListTileThemeData(

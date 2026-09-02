@@ -499,7 +499,7 @@ class _StaffHomeViewState extends State<StaffHomeView> {
           const SizedBox(height: AppSpacing.xl),
           Center(
             child: Text('Be@Mandaluyong · Staff Console',
-                style: text.labelSmall?.copyWith(color: colors.outline)),
+                style: text.labelSmall?.copyWith(color: colors.onSurfaceVariant)),
           ),
         ],
       ),
@@ -621,7 +621,7 @@ class _WorkRow extends StatelessWidget {
                           ?.copyWith(fontWeight: FontWeight.w600)),
                   Text(subtitle,
                       style: text.bodySmall
-                          ?.copyWith(color: colors.outline)),
+                          ?.copyWith(color: colors.onSurfaceVariant)),
                 ],
               ),
             ),

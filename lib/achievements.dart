@@ -49,7 +49,7 @@ Future<void> showBadgeUnlocked(BuildContext context, TrailBadge badge) {
           const SizedBox(height: 4),
           Text(badge.desc,
               textAlign: TextAlign.center,
-              style: TextStyle(color: colors.outline)),
+              style: TextStyle(color: colors.onSurfaceVariant)),
         ],
       ),
       actions: [
