@@ -50,3 +50,6 @@ app.*.map.json
 # Accidental build/verbose log dumps
 /debug_log*.txt
 /verbose_log*.txt
+
+replay_pid*.log
+hs_err_pid*.log
