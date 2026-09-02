@@ -244,7 +244,7 @@ class _EventsManagerBody extends StatelessWidget {
                       'Tap "New event" to publish the first city activity.',
                       textAlign: TextAlign.center,
                       style: text.bodySmall
-                          ?.copyWith(color: colors.outline),
+                          ?.copyWith(color: colors.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -332,7 +332,7 @@ class _EventCard extends StatelessWidget {
                   Expanded(
                     child: Text(event.dateLabel,
                         style: text.bodySmall
-                            ?.copyWith(color: colors.outline)),
+                            ?.copyWith(color: colors.onSurfaceVariant)),
                   ),
                 ],
               ),
@@ -346,7 +346,7 @@ class _EventCard extends StatelessWidget {
                     Expanded(
                       child: Text(event.venue,
                           style: text.bodySmall
-                              ?.copyWith(color: colors.outline)),
+                              ?.copyWith(color: colors.onSurfaceVariant)),
                     ),
                   ],
                 ),

@@ -251,7 +251,7 @@ class _ChurchSheet extends StatelessWidget {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(church.era,
-                      style: text.bodyMedium?.copyWith(color: colors.outline)),
+                      style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
                 ),
               ],
             ),
@@ -358,7 +358,7 @@ class _AttractionSheet extends StatelessWidget {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(item.meta,
-                      style: text.bodyMedium?.copyWith(color: colors.outline)),
+                      style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
                 ),
               ],
             ),
@@ -368,7 +368,7 @@ class _AttractionSheet extends StatelessWidget {
                 Icon(Icons.sell_outlined, size: 16, color: colors.outline),
                 const SizedBox(width: 6),
                 Text(item.tag,
-                    style: text.bodyMedium?.copyWith(color: colors.outline)),
+                    style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
               ],
             ),
             const SizedBox(height: AppSpacing.l),

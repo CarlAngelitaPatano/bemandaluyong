@@ -247,7 +247,7 @@ class SentimentEvalPage extends StatelessWidget {
             child: Text(
               'The classifier was tested against ${r.total} hand-labelled '
               'visitor comments in English, Filipino and Taglish.',
-              style: text.bodyMedium?.copyWith(color: colors.outline),
+              style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
             ),
           ),
           const SizedBox(height: AppSpacing.xl),
@@ -346,7 +346,7 @@ class SentimentEvalPage extends StatelessWidget {
           Reveal(
             delayMs: 260,
             child: Text('Rows = actual label, columns = predicted label.',
-                style: text.bodySmall?.copyWith(color: colors.outline)),
+                style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
           ),
           const SizedBox(height: AppSpacing.m),
           Reveal(

@@ -343,8 +343,22 @@ class FeaturedChurchCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Explore tab content (no Scaffold — lives inside HomeShell)
+// The heritage churches list.
+//
+// [HeritageChurchesView] is the bare content (no Scaffold), kept for anywhere
+// that already supplies its own frame. [HeritageChurchesPage] wraps it in a
+// screen with an app bar, which is what the Services menu opens.
 // ---------------------------------------------------------------------------
+class HeritageChurchesPage extends StatelessWidget {
+  const HeritageChurchesPage({super.key});
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(title: const Text('Heritage Trail')),
+        body: const HeritageChurchesView(),
+      );
+}
+
 class HeritageChurchesView extends StatelessWidget {
   const HeritageChurchesView({super.key});
 
@@ -667,17 +681,23 @@ class TrailProgress {
   /// Marks a church verified once the required photo proof is provided,
   /// saves it locally, and records the check-in (with photo proof) on the
   /// shared backend — this is what makes it appear on the website too.
-  static Future<void> markVerified(Church c, List<String> photoPaths) async {
+  ///
+  /// Returns true when the backend accepted the check-in. A false result is
+  /// NOT a failure to verify: the visit is already saved on the device and
+  /// [syncWithCloud] will push it the next time the app has a connection. The
+  /// caller uses the answer only to be honest about what has happened so far,
+  /// rather than claiming the office has it when it may not yet.
+  static Future<bool> markVerified(Church c, List<String> photoPaths) async {
     proofs[c.name] = photoPaths;
     visited.add(c.name);
     await _save();
-    if (photoPaths.length >= 2) {
-      await TcimsApi.postMultipart(
-        '/api/checkin.php',
-        fields: {'place': c.name},
-        files: {'selfie': photoPaths[0], 'site': photoPaths[1]},
-      );
-    }
+    if (photoPaths.length < 2) return false;
+    final result = await TcimsApi.postMultipart(
+      '/api/checkin.php',
+      fields: {'place': c.name},
+      files: {'selfie': photoPaths[0], 'site': photoPaths[1]},
+    );
+    return result != null;
   }
 
   /// Re-syncs the current progress with the shared account (app ↔ website).
@@ -827,7 +847,7 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
           const SizedBox(height: 8),
           Text(
             '$visitedCount of $total stops visited',
-            style: TextStyle(color: colors.outline),
+            style: TextStyle(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: 20),
 
@@ -1098,7 +1118,7 @@ class _VerifyVisitPageState extends State<VerifyVisitPage> {
         widget.church.lng,
       );
       if (meters <= _radiusMeters) {
-        await TrailProgress.markVerified(
+        final sentToOffice = await TrailProgress.markVerified(
           widget.church,
           [_selfie!.path, _churchPhoto!.path],
         );
@@ -1114,6 +1134,22 @@ class _VerifyVisitPageState extends State<VerifyVisitPage> {
                   AppTheme.successFor(Theme.of(context).brightness),
               content: Text(
                 'Verified! You were about ${meters.round()} m from the church.',
+              ),
+            ),
+          );
+        }
+        if (!mounted) return;
+        // The visit itself is safe on this device either way. Say so plainly
+        // when the office does not have it yet, rather than letting the person
+        // assume it was filed when the upload has not gone through.
+        if (!sentToOffice) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              duration: Duration(seconds: 5),
+              content: Text(
+                'Saved on this phone. The photos have not reached the tourism '
+                'office yet — they will be sent automatically once you have a '
+                'connection.',
               ),
             ),
           );

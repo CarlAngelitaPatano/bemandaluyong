@@ -190,7 +190,7 @@ class EmergencyPage extends StatelessWidget {
             delayMs: 120,
             child: Text(
               'Tap any line to dial it.',
-              style: text.bodySmall?.copyWith(color: colors.outline),
+              style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
             ),
           ),
           const SizedBox(height: AppSpacing.m),

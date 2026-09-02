@@ -6,21 +6,15 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'firebase_options.dart';
-import 'report_concern_page.dart';
 import 'auth_pages.dart';
 import 'theme.dart';
 import 'heritage.dart';
-import 'city_content.dart';
-import 'news_page.dart';
-import 'attractions.dart';
+import 'city_content.dart'; // events calendar — "this month" dashboard card
 import 'profile_page.dart';
 import 'notifications.dart';
-import 'ar_view.dart';
 import 'theme_controller.dart';
-import 'trail_map.dart';
 import 'onboarding.dart';
 import 'search.dart';
-import 'dining.dart';
 import 'weather.dart';
 import 'local_notifs.dart';
 import 'avatars.dart'; // built-in avatar option
@@ -29,15 +23,14 @@ import 'user_profile.dart'; // date of birth / trail age requirement
 import 'emergency.dart'; // emergency hotlines
 import 'announcements.dart'; // official city announcements
 import 'itinerary.dart'; // suggested itineraries
-import 'feedback_page.dart'; // visitor feedback → CCAT sentiment analysis
 import 'analytics_dashboard.dart'; // sentiment analytics dashboard
-import 'accreditation.dart'; // policy management / accreditation
 import 'staff_access.dart'; // CCAT admin console
 import 'staff_panel.dart'; // CCAT staff console
 import 'events_manager.dart'; // staff event management
-import 'event_requests.dart'; // resident event proposals
 import 'sentiment_eval.dart'; // NLP accuracy report
 import 'tcims_api.dart'; // shared TCIMS backend (MySQL) — auth + trail sync
+import 'app_features.dart'; // one shared catalogue of features per role
+import 'quick_menu.dart'; // floating menu button, reachable from any tab
 
 void main() async {
   // Required before any async work in main().
@@ -46,6 +39,11 @@ void main() async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  // Wake the shared backend now, in the background. The free hosting tier
+  // suspends the service when idle, and booting it takes long enough that a
+  // first submission can time out; starting it here means it is already up by
+  // the time anyone sends feedback or verifies a church. Never awaited.
+  TcimsApi.warmUp();
   // Restore saved Heritage Church Trail progress.
   await TrailProgress.load();
   // Restore the saved light/dark theme choice.
@@ -123,10 +121,13 @@ class _HomeShellState extends State<HomeShell> {
   int _unread = 0; // unread notification count for the bell badge
 
   // Visitors browse the city; CCAT staff manage it. Different tabs entirely.
+  //
+  // Visitors keep only Home and Profile as tabs. Everything else — the
+  // heritage trail included — is reached through the Services circle docked
+  // in the middle of the footer, which keeps the bar uncluttered and the
+  // feature list in one place.
   static const List<Widget> _visitorPages = <Widget>[
     HomePage(),
-    HeritageChurchesView(),
-    ServicesGridPage(),
     ProfilePage(),
   ];
 
@@ -140,6 +141,10 @@ class _HomeShellState extends State<HomeShell> {
 
   List<Widget> get _pages =>
       StaffAccess.isStaff ? _staffPages : _visitorPages;
+
+  /// Profile is always the last tab, and staff have one more tab than
+  /// visitors — so the index is derived rather than written down twice.
+  int get _profileIndex => _pages.length - 1;
 
   @override
   void initState() {
@@ -230,7 +235,7 @@ class _HomeShellState extends State<HomeShell> {
         leadingWidth: 60,
         leading: Center(
           child: GestureDetector(
-            onTap: () => _onTab(3), // jump to the Profile tab
+            onTap: () => _onTab(_profileIndex), // jump to the Profile tab
             child: Container(
               margin: const EdgeInsets.only(left: 12),
               padding: const EdgeInsets.all(2),
@@ -296,39 +301,180 @@ class _HomeShellState extends State<HomeShell> {
         ],
       ),
       body: _pages[_selectedIndex],
-      bottomNavigationBar: NavigationBar(
+      // Services is the raised circle notched into the middle of the footer,
+      // reachable from every tab rather than being a tab of its own.
+      floatingActionButton: const QuickMenuButton(),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      bottomNavigationBar: _AppFooter(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: _onTab,
-        destinations: [
-          const NavigationDestination(
-              icon: Icon(Icons.home_outlined),
-              selectedIcon: Icon(Icons.home),
-              label: 'Home'),
-          if (StaffAccess.isStaff) ...[
-            const NavigationDestination(
-                icon: Icon(Icons.event_note_outlined),
-                selectedIcon: Icon(Icons.event_note),
-                label: 'Events'),
-            const NavigationDestination(
-                icon: Icon(Icons.insights_outlined),
-                selectedIcon: Icon(Icons.insights),
-                label: 'Feedback'),
-          ] else ...[
-            const NavigationDestination(
-                icon: Icon(Icons.explore_outlined),
-                selectedIcon: Icon(Icons.explore),
-                label: 'Explore'),
-            const NavigationDestination(
-                icon: Icon(Icons.grid_view_outlined),
-                selectedIcon: Icon(Icons.grid_view_rounded),
-                label: 'Services'),
-          ],
-          const NavigationDestination(
-              icon: Icon(Icons.person_outline),
-              selectedIcon: Icon(Icons.person),
-              label: 'Profile'),
+        onSelected: _onTab,
+        destinations: StaffAccess.isStaff
+            ? const [
+                _Destination(Icons.home_outlined, Icons.home, 'Home'),
+                _Destination(
+                    Icons.event_note_outlined, Icons.event_note, 'Events'),
+                _Destination(Icons.insights_outlined, Icons.insights, 'Feedback'),
+                _Destination(Icons.person_outline, Icons.person, 'Profile'),
+              ]
+            : const [
+                _Destination(Icons.home_outlined, Icons.home, 'Home'),
+                _Destination(Icons.person_outline, Icons.person, 'Profile'),
+              ],
+      ),
+    );
+  }
+}
+
+// ===========================================================================
+// The footer.
+//
+// A notched bar with the Services circle docked in the middle. Destinations
+// are split into equal halves either side of the notch so the button sits
+// dead centre; when a role has an odd number of tabs the shorter side is
+// padded with an empty slot, which keeps the spacing on both sides identical
+// rather than bunching the tabs toward one edge.
+// ===========================================================================
+
+class _Destination {
+  const _Destination(this.icon, this.activeIcon, this.label);
+  final IconData icon;
+  final IconData activeIcon;
+  final String label;
+}
+
+class _AppFooter extends StatelessWidget {
+  const _AppFooter({
+    required this.selectedIndex,
+    required this.onSelected,
+    required this.destinations,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+  final List<_Destination> destinations;
+
+  /// Width reserved for the notch and the "Services" label beneath it.
+  static const double _notchSlot = 84;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    // Phones with a gesture bar reserve space along the bottom edge. The bar
+    // grows by that much and pads itself, so the labels are never sat on.
+    final inset = MediaQuery.viewPaddingOf(context).bottom;
+
+    // Split either side of the centre, rounding up so a lone extra tab sits
+    // on the left, then pad the right to match.
+    final half = (destinations.length / 2).ceil();
+    final left = <Widget>[
+      for (var i = 0; i < half; i++) Expanded(child: _tab(context, i)),
+    ];
+    final right = <Widget>[
+      for (var i = half; i < destinations.length; i++)
+        Expanded(child: _tab(context, i)),
+      // Empty slot balancing an odd tab count, so the two halves stay mirrored.
+      for (var i = destinations.length; i < half * 2; i++)
+        const Expanded(child: SizedBox.shrink()),
+    ];
+
+    return BottomAppBar(
+      // Shared with the Services sheet, which anchors its circle to this
+      // height so the button blooms in place instead of jumping. Colour and
+      // lift come from bottomAppBarTheme rather than being written here.
+      height: footerHeight(context) + inset,
+      padding: EdgeInsets.only(bottom: inset),
+      shape: const CircularNotchedRectangle(),
+      notchMargin: 7,
+      child: Row(
+        children: [
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: left,
+            ),
+          ),
+          // Sits under the notch, matching the other labels so the raised
+          // circle reads as one of the destinations rather than an add button.
+          SizedBox(
+            width: _notchSlot,
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: Padding(
+                padding: const EdgeInsets.only(bottom: 9),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                  onTap: () => openQuickMenu(context),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 2),
+                    child: Text(
+                      'Services',
+                      style: text.labelMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: colors.primary,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: right,
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _tab(BuildContext context, int index) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final d = destinations[index];
+    final selected = index == selectedIndex;
+    final tint = selected ? colors.primary : colors.onSurfaceVariant;
+
+    return InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.md),
+        onTap: () => onSelected(index),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // A soft pill behind the active icon, echoing the indicator the
+              // Material navigation bar draws.
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOut,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 3),
+                decoration: BoxDecoration(
+                  color: selected
+                      ? colors.primary.withValues(alpha: 0.14)
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(AppRadius.pill),
+                ),
+                child: Icon(selected ? d.activeIcon : d.icon,
+                    size: 23, color: tint),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                d.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: text.labelSmall?.copyWith(
+                  color: tint,
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
     );
   }
 }
@@ -492,6 +638,10 @@ class HomePage extends StatelessWidget {
                 : const _MayorSpotlightCard(),
           ),
 
+          // ---- 3. What is on in the city this month ----
+          const SizedBox(height: AppSpacing.xxl),
+          const _Reveal(delayMs: 260, child: _ThisMonthEventsCard()),
+
           // (All the feature tiles now live in the "Services" tab, keeping
           // this dashboard calm and scannable.)
           const SizedBox(height: AppSpacing.xl),
@@ -501,19 +651,198 @@ class HomePage extends StatelessWidget {
   }
 }
 
-/// Simple data holder for a feature card.
-class _Feature {
-  final String label;
-  final IconData icon;
-  final Color color; // the feature's color identity
-  final WidgetBuilder? page; // optional screen to open when tapped
-  const _Feature(this.label, this.icon,
-      {this.color = const Color(0xFF0038A8), this.page});
+// ===========================================================================
+// "This month in Mandaluyong"
+//
+// The events calendar holds a whole year, which is more than anyone opening
+// the app wants to read. This card answers the only question most people are
+// actually asking — what is on right now — and rolls over on its own as the
+// months pass, with no list to maintain.
+// ===========================================================================
+class _ThisMonthEventsCard extends StatefulWidget {
+  const _ThisMonthEventsCard();
+
+  @override
+  State<_ThisMonthEventsCard> createState() => _ThisMonthEventsCardState();
 }
+
+class _ThisMonthEventsCardState extends State<_ThisMonthEventsCard>
+    with SingleTickerProviderStateMixin {
+  /// A slow breathing glow on the gold chip. Deliberately long and shallow:
+  /// enough movement to draw the eye back to the card, not so much that it
+  /// nags at someone reading the rest of the dashboard.
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 2400),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    final now = DateTime.now();
+    final events = eventsInMonth(now.month);
+    // Quiet months are left alone rather than showing an empty card.
+    if (events.isEmpty) return const SizedBox.shrink();
+
+    // Three is enough to be useful; the rest are one tap away.
+    final preview = events.take(3).toList();
+    final more = events.length - preview.length;
+
+    return Card(
+      // Gold hairline, matching the trail card, so the two "live" cards on the
+      // dashboard read as a set and stand apart from the static ones.
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        side: BorderSide(color: AppTheme.brandGold.withValues(alpha: 0.45)),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const EventsPage()),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.l),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  AnimatedBuilder(
+                    animation: _pulse,
+                    builder: (context, child) {
+                      final t = Curves.easeInOut.transform(_pulse.value);
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: AppSpacing.m, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppTheme.brandGold
+                              .withValues(alpha: 0.16 + (0.16 * t)),
+                          borderRadius: BorderRadius.circular(AppRadius.pill),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppTheme.brandGold
+                                  .withValues(alpha: 0.28 * t),
+                              blurRadius: 10 * t,
+                              spreadRadius: 1 * t,
+                            ),
+                          ],
+                        ),
+                        child: child,
+                      );
+                    },
+                    child: Text(
+                      'This month',
+                      style: text.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: colors.onSurface,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.s),
+                  Expanded(
+                    child: Text(
+                      monthName(now.month),
+                      style: text.titleMedium
+                          ?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  // The count ticks up on arrival — a small piece of motion
+                  // that says this number was worked out, not printed.
+                  TweenAnimationBuilder<double>(
+                    tween: Tween(begin: 0, end: events.length.toDouble()),
+                    duration: const Duration(milliseconds: 900),
+                    curve: Curves.easeOutCubic,
+                    builder: (context, value, _) => Text(
+                      '${value.round()}',
+                      style: text.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        color: colors.primary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.m),
+              // Each event slides in behind the one above it.
+              for (var i = 0; i < preview.length; i++)
+                _Reveal(
+                  delayMs: 340 + (i * 110),
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: AppSpacing.s),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(preview[i].icon, size: 18, color: colors.primary),
+                        const SizedBox(width: AppSpacing.s),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                preview[i].title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: text.bodyMedium
+                                    ?.copyWith(fontWeight: FontWeight.w600),
+                              ),
+                              Text(
+                                preview[i].meta,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: text.bodySmall
+                                    ?.copyWith(color: colors.onSurfaceVariant),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              _Reveal(
+                delayMs: 340 + (preview.length * 110),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        more > 0
+                            ? '$more more this month — see the full calendar'
+                            : 'See the full calendar',
+                        style: text.labelMedium?.copyWith(
+                          color: colors.primary,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    Icon(Icons.chevron_right_rounded,
+                        size: 18, color: colors.primary),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Simple data holder for a feature card.
+// The feature model and the role-aware lists now live in app_features.dart,
+// so the Services grid below and the floating quick menu draw from one source.
 
 class _FeatureCard extends StatefulWidget {
   const _FeatureCard({required this.feature});
-  final _Feature feature;
+  final AppFeature feature;
 
   @override
   State<_FeatureCard> createState() => _FeatureCardState();
@@ -605,7 +934,7 @@ class PlaceholderPage extends StatelessWidget {
           const SizedBox(height: AppSpacing.l),
           Text('$label page', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: AppSpacing.s),
-          Text('Coming soon', style: TextStyle(color: colors.outline)),
+          Text('Coming soon', style: TextStyle(color: colors.onSurfaceVariant)),
         ],
       ),
     );
@@ -696,7 +1025,7 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
                     const SizedBox(height: 2),
                     Text(subtitle,
                         style:
-                            text.bodySmall?.copyWith(color: colors.outline)),
+                            text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
                   ],
                 ),
               ),
@@ -721,7 +1050,7 @@ class _TrailProgressCardState extends State<_TrailProgressCard> {
           ),
           const SizedBox(height: 6),
           Text('$visited of $total churches visited',
-              style: text.bodySmall?.copyWith(color: colors.outline)),
+              style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
           const SizedBox(height: AppSpacing.m),
           SizedBox(
             width: double.infinity,
@@ -787,58 +1116,16 @@ class ServicesGridPage extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
 
-    final explore = <_Feature>[
-      _Feature('Itineraries', Icons.route_rounded,
-          color: const Color(0xFF6D4C41), page: (_) => const ItineraryPage()),
-      _Feature('Map', Icons.map_rounded,
-          color: const Color(0xFF1E88E5), page: (_) => const TrailMapPage()),
-      _Feature('Attractions', Icons.photo_camera_rounded,
-          color: const Color(0xFFF4511E),
-          page: (_) => const AttractionsPage()),
-      _Feature('Homegrown', Icons.storefront_rounded,
-          color: const Color(0xFF8E24AA), page: (_) => const DiningPage()),
-      _Feature('3D / AR', Icons.view_in_ar_rounded,
-          color: const Color(0xFF00897B), page: (_) => const ArIntroPage()),
-    ];
     final role = UserRoleStore.current;
-
-    final cityServices = <_Feature>[
-      // Official city announcements are aimed at residents, so they are
-      // shown to Mandaleños (and staff) rather than visiting tourists.
-      if (role == UserRole.mandaleno)
-        _Feature('Announcements', Icons.campaign_rounded,
-            color: const Color(0xFF00838F),
-            page: (_) => const AnnouncementsPage()),
-      _Feature('News', Icons.newspaper_rounded,
-          color: const Color(0xFF3949AB), page: (_) => const NewsPage()),
-      _Feature('Events', Icons.event_rounded,
-          color: const Color(0xFFE53935), page: (_) => const EventsPage()),
-      _Feature('Services', Icons.widgets_rounded,
-          color: const Color(0xFF43A047), page: (_) => const ServicesPage()),
-      _Feature('Contact', Icons.support_agent_rounded,
-          color: const Color(0xFFFB8C00),
-          page: (_) => const ReportConcernPage()),
-      _Feature('Feedback', Icons.rate_review_rounded,
-          color: const Color(0xFF00838F), page: (_) => const FeedbackPage()),
-      // Business accreditation is for local establishment owners, so it is
-      // offered to Mandaleños only. (Analytics is a CCAT staff tool and is
-      // not shown to visitors at all.)
-      if (role == UserRole.mandaleno) ...[
-        _Feature('Accreditation', Icons.verified_outlined,
-            color: const Color(0xFF00695C),
-            page: (_) => const AccreditationPage()),
-        _Feature('Request Event', Icons.add_circle_outline,
-            color: const Color(0xFF5E35B1),
-            page: (_) => const EventRequestPage()),
-      ],
-    ];
+    final explore = exploreFeatures();
+    final cityServices = cityServiceFeatures(role);
 
     final first = role == UserRole.mandaleno ? cityServices : explore;
     final second = role == UserRole.mandaleno ? explore : cityServices;
     final firstTitle = role.primarySectionTitle;
     final secondTitle = role.secondarySectionTitle;
 
-    Widget grid(List<_Feature> items, int delay) => _Reveal(
+    Widget grid(List<AppFeature> items, int delay) => _Reveal(
           delayMs: delay,
           child: GridView.count(
             crossAxisCount: 3,
@@ -865,7 +1152,7 @@ class ServicesGridPage extends StatelessWidget {
           delayMs: 40,
           child: Text(
             'Everything Be@Mandaluyong can do, in one place.',
-            style: text.bodyMedium?.copyWith(color: colors.outline),
+            style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
           ),
         ),
         const SizedBox(height: AppSpacing.xl),
@@ -1024,7 +1311,7 @@ class _ItinerarySpotlightCard extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       'Follow a ready-made half-day or full-day plan',
-                      style: text.bodySmall?.copyWith(color: colors.outline),
+                      style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                     ),
                   ],
                 ),
@@ -1086,7 +1373,7 @@ class _MayorSpotlightCard extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       'Official announcements, advisories and city updates',
-                      style: text.bodySmall?.copyWith(color: colors.outline),
+                      style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                     ),
                   ],
                 ),

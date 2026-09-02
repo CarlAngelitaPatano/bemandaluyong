@@ -477,7 +477,7 @@ class _ProfilePageState extends State<ProfilePage> {
               const SizedBox(height: AppSpacing.m),
               Text(name, style: text.titleLarge),
               const SizedBox(height: 2),
-              Text(email, style: text.bodyMedium?.copyWith(color: colors.outline)),
+              Text(email, style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
               const SizedBox(height: AppSpacing.s),
               // Role badge — "CCAT Officer" for staff, Tourist/Mandaleño
               // for visitors.
@@ -589,7 +589,7 @@ class _ProfilePageState extends State<ProfilePage> {
           Text(
             '${kBadges.where((b) => visited >= b.threshold).length} of '
             '${kBadges.length} earned',
-            style: text.bodySmall?.copyWith(color: colors.outline),
+            style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: AppSpacing.m),
           SizedBox(
@@ -752,7 +752,7 @@ class _ProfilePageState extends State<ProfilePage> {
         Center(
           child: Text(
             'Be@Mandaluyong',
-            style: text.labelMedium?.copyWith(color: colors.outline),
+            style: text.labelMedium?.copyWith(color: colors.onSurfaceVariant),
           ),
         ),
       ],
@@ -792,7 +792,7 @@ class AboutPage extends StatelessWidget {
           const SizedBox(height: 4),
           Center(
             child: Text('Version 1.0.0',
-                style: text.bodyMedium?.copyWith(color: colors.outline)),
+                style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
           ),
           const SizedBox(height: AppSpacing.xxl),
           Text('About the app', style: text.titleMedium),
@@ -822,7 +822,7 @@ class AboutPage extends StatelessWidget {
           const SizedBox(height: AppSpacing.xxl),
           Center(
             child: Text('© 2026 Be@Mandaluyong',
-                style: text.bodySmall?.copyWith(color: colors.outline)),
+                style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
           ),
         ],
       ),
@@ -847,7 +847,7 @@ class _CreditRow extends StatelessWidget {
           Text(label,
               style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w700)),
           Text(value,
-              style: text.bodyMedium?.copyWith(color: colors.outline)),
+              style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant)),
         ],
       ),
     );

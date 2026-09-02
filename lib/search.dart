@@ -110,7 +110,7 @@ class AppSearchDelegate extends SearchDelegate<String?> {
           title: Text(h.title,
               style: text.bodyLarge?.copyWith(fontWeight: FontWeight.w600)),
           subtitle: Text(h.category,
-              style: text.bodySmall?.copyWith(color: colors.outline)),
+              style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant)),
           trailing: const Icon(Icons.chevron_right),
           onTap: () => Navigator.push(
             context,
@@ -141,7 +141,7 @@ class _CenterHint extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: TextStyle(color: colors.outline),
+              style: TextStyle(color: colors.onSurfaceVariant),
             ),
           ],
         ),

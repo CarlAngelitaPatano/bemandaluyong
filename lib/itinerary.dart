@@ -239,7 +239,7 @@ class ItineraryPage extends StatelessWidget {
             child: Text(
               'Pick a ready-made plan built around Mandaluyong\'s heritage '
               'churches, landmarks and homegrown favourites.',
-              style: text.bodyMedium?.copyWith(color: colors.outline),
+              style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
             ),
           ),
           const SizedBox(height: AppSpacing.xl),
@@ -313,7 +313,7 @@ class _ItineraryCard extends StatelessWidget {
                       Text(
                         itinerary.subtitle,
                         style:
-                            text.bodySmall?.copyWith(color: colors.outline),
+                            text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                       ),
                     ],
                   ),
@@ -451,7 +451,7 @@ class _StopRow extends StatelessWidget {
                   const SizedBox(height: 2),
                   Text(
                     stop.detail,
-                    style: text.bodySmall?.copyWith(color: colors.outline),
+                    style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                   ),
                   const SizedBox(height: AppSpacing.s),
                 ],

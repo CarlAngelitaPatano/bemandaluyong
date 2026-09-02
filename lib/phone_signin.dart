@@ -148,7 +148,7 @@ class _PhoneSignInPageState extends State<PhoneSignInPage> {
                 ? 'We sent a 6-digit code to ${_phone.text.trim()}.'
                 : 'Include your country code — e.g. +63 for the Philippines.',
             textAlign: TextAlign.center,
-            style: text.bodyMedium?.copyWith(color: colors.outline),
+            style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
           ),
           const SizedBox(height: AppSpacing.xxl),
           if (!_codeSent) ...[

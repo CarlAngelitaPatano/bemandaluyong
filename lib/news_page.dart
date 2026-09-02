@@ -237,7 +237,7 @@ class _NewsCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         meta,
-                        style: text.bodySmall?.copyWith(color: colors.outline),
+                        style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -278,7 +278,7 @@ class _ErrorView extends StatelessWidget {
         Center(
           child: Text(
             'Check your internet connection and try again.',
-            style: TextStyle(color: colors.outline),
+            style: TextStyle(color: colors.onSurfaceVariant),
           ),
         ),
         const SizedBox(height: AppSpacing.l),

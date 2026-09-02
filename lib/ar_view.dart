@@ -80,7 +80,7 @@ class ArIntroPage extends StatelessWidget {
             'The demo uses a sample model to show the 3D viewer and the '
             '“View in AR” button.',
             textAlign: TextAlign.center,
-            style: text.bodySmall?.copyWith(color: colors.outline),
+            style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
           ),
         ],
       ),
