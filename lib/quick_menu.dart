@@ -174,10 +174,10 @@ void openQuickMenu(BuildContext context) {
     barrierDismissible: true,
     barrierLabel: 'Quick menu',
     barrierColor: Colors.transparent, // the sheet paints its own scrim
-    // Long enough for the icons to cascade in one after another rather than
-    // arriving together. showGeneralDialog applies this to both directions,
-    // so the reverse curves below finish early to keep dismissal snappy.
-    transitionDuration: const Duration(milliseconds: 560),
+    // Long enough to watch: the circle grows, then the icons cascade in one
+    // after another. showGeneralDialog applies this to both directions, so the
+    // reverse curves below finish early to keep dismissal snappy.
+    transitionDuration: const Duration(milliseconds: 720),
     pageBuilder: (_, _, _) => const SizedBox.shrink(),
     transitionBuilder: (dialogContext, animation, _, _) {
       // Opening eases out over the full duration. Closing is compressed into
@@ -261,18 +261,43 @@ class _QuickMenuSheet extends StatelessWidget {
           SafeArea(
             child: Column(
               children: [
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Padding(
-                    padding: const EdgeInsets.only(
-                        right: AppSpacing.m, top: AppSpacing.s),
-                    child: IconButton(
-                      tooltip: 'Close',
-                      onPressed: () => Navigator.of(context).pop(),
-                      icon: const Icon(Icons.close_rounded),
-                    ),
+                // A title in the brand serif gives the sheet an identity —
+                // it reads as a place in the app rather than a menu that
+                // dropped out of nowhere.
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.l, AppSpacing.s, AppSpacing.m, 0),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              'Services',
+                              style: AppTheme.brandTextStyle(
+                                fontSize: 26,
+                                color: colors.onSurface,
+                              ),
+                            ),
+                            Text(
+                              'Everything Be@Mandaluyong can do',
+                              style: text.bodySmall
+                                  ?.copyWith(color: colors.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => Navigator.of(context).pop(),
+                        icon: const Icon(Icons.close_rounded),
+                      ),
+                    ],
                   ),
                 ),
+                const SizedBox(height: AppSpacing.m),
                 Expanded(
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(
@@ -383,21 +408,32 @@ class _CircularReveal extends StatelessWidget {
       math.pow(size.width / 2, 2) + math.pow(centre.dy, 2),
     );
 
-    // The wipe finishes early so the icons still have time to cascade in
-    // afterwards, inside the already-open sheet.
+    // The wipe takes most of the opening, easing in gently rather than
+    // snapping outward — a circle that reaches the screen edge in a fifth of a
+    // second reads as "it just appeared", however carefully it was animated.
     final grow = CurvedAnimation(
       parent: animation,
-      curve: const Interval(0, 0.55, curve: Curves.easeOutCubic),
+      curve: const Interval(0, 0.78, curve: Curves.easeInOutCubic),
+    );
+
+    // A short fade over the top softens the clip's hard edge, so the sheet
+    // arrives rather than being cut in.
+    final soften = CurvedAnimation(
+      parent: animation,
+      curve: const Interval(0, 0.35, curve: Curves.easeOut),
     );
 
     return AnimatedBuilder(
       animation: grow,
-      builder: (context, inner) => ClipPath(
-        clipper: _CircleClipper(
-          centre: centre,
-          radius: lerpDouble(_kButtonSize / 2, maxRadius, grow.value)!,
+      builder: (context, inner) => Opacity(
+        opacity: soften.value,
+        child: ClipPath(
+          clipper: _CircleClipper(
+            centre: centre,
+            radius: lerpDouble(_kButtonSize / 2, maxRadius, grow.value)!,
+          ),
+          child: inner,
         ),
-        child: inner,
       ),
       child: child,
     );
@@ -445,7 +481,7 @@ class _TrailCard extends StatelessWidget {
 
     final entrance = CurvedAnimation(
       parent: animation,
-      curve: const Interval(0, 0.5, curve: Curves.easeOutCubic),
+      curve: const Interval(0.22, 0.72, curve: Curves.easeOutCubic),
     );
 
     return AnimatedBuilder(
@@ -584,25 +620,43 @@ class _SectionBlock extends StatelessWidget {
         decoration: BoxDecoration(
           // A solid container rather than a translucent one: over the blurred
           // page, a see-through card muddied the labels in both themes.
+          // No border — the surface change and the spacing already separate
+          // the sections, and a line around each one only adds weight.
           color: colors.surfaceContainerHigh,
           borderRadius: BorderRadius.circular(AppRadius.lg),
-          border: Border.all(color: colors.outlineVariant.withValues(alpha: 0.5)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              section.title,
-              style: text.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            Row(
+              children: [
+                // A small gold stroke beside each heading — the seal's accent,
+                // enough to carry the city's colour into the layout without
+                // drawing another box.
+                Container(
+                  width: 3,
+                  height: 15,
+                  decoration: BoxDecoration(
+                    color: AppTheme.brandGold,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                const SizedBox(width: AppSpacing.s),
+                Text(
+                  section.title,
+                  style:
+                      text.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                ),
+              ],
             ),
-            const SizedBox(height: AppSpacing.m),
+            const SizedBox(height: AppSpacing.l),
             GridView.count(
               crossAxisCount: 3,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: AppSpacing.m,
+              mainAxisSpacing: AppSpacing.l,
               crossAxisSpacing: AppSpacing.s,
-              childAspectRatio: 0.88,
+              childAspectRatio: 0.84,
               children: [
                 for (var i = 0; i < section.features.length; i++)
                   _Shortcut(
@@ -653,10 +707,12 @@ class _ShortcutState extends State<_Shortcut> {
     // Each icon occupies a slice of the opening animation. The slices overlap
     // heavily, so the effect is a flowing cascade rather than a queue of items
     // waiting their turn. The last one still lands before the sheet settles.
-    final begin = math.min(0.06 + (widget.order * 0.045), 0.62);
+    // Starts once the circle has opened enough to show them, then each icon
+    // follows the one before it.
+    final begin = math.min(0.30 + (widget.order * 0.040), 0.70);
     final entrance = CurvedAnimation(
       parent: widget.animation,
-      curve: Interval(begin, math.min(begin + 0.42, 1), curve: Curves.easeOut),
+      curve: Interval(begin, math.min(begin + 0.30, 1), curve: Curves.easeOut),
     );
 
     return AnimatedBuilder(
@@ -685,13 +741,31 @@ class _ShortcutState extends State<_Shortcut> {
                 clipBehavior: Clip.none,
                 children: [
                   Container(
-                    width: 54,
-                    height: 54,
+                    width: 56,
+                    height: 56,
                     decoration: BoxDecoration(
-                      color: tint.withValues(alpha: 0.16),
                       shape: BoxShape.circle,
+                      // A gentle gradient instead of a flat wash, so each
+                      // circle has a little depth and catches the light.
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          tint.withValues(alpha: 0.28),
+                          tint.withValues(alpha: 0.10),
+                        ],
+                      ),
+                      // A soft shadow in the feature's own colour lifts the
+                      // circle off the card rather than outlining it.
+                      boxShadow: [
+                        BoxShadow(
+                          color: tint.withValues(alpha: 0.20),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                    child: Icon(f.icon, size: 25, color: tint),
+                    child: Icon(f.icon, size: 26, color: tint),
                   ),
                   if (f.badge != null)
                     Positioned(

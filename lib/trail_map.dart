@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'heritage.dart'; // kChurches, Church, TrailProgress, ChurchDetailPage
 import 'city_content.dart'; // CityItem, CityDetailPage
 import 'attractions.dart'; // kAttractions
+import 'directions.dart'; // walking routes + hand-off to Google Maps
 import 'theme.dart';
 
 // Distinct color for tourist-attraction pins (churches use the brand colors).
@@ -32,8 +33,14 @@ class _TrailMapPageState extends State<TrailMapPage> {
   LatLng? _me; // user's current position
   bool _locating = false;
 
-  Future<void> _locate() async {
-    setState(() => _locating = true);
+  // The route currently drawn on the map, if any, and where it leads.
+  WalkingRoute? _route;
+  String? _routeTo;
+  bool _routing = false;
+
+  /// Gets the current position, asking for permission if needed. Returns null
+  /// and explains why when it cannot — the caller just stops.
+  Future<LatLng?> _ensureLocation() async {
     try {
       final on = await Geolocator.isLocationServiceEnabled();
       if (!on) throw 'Turn on Location (GPS) to see where you are.';
@@ -48,31 +55,86 @@ class _TrailMapPageState extends State<TrailMapPage> {
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
-      if (!mounted) return;
+      if (!mounted) return null;
       final me = LatLng(pos.latitude, pos.longitude);
       setState(() => _me = me);
-      _map.move(me, 16);
+      return me;
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted) return null;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.toString())),
       );
-    } finally {
-      if (mounted) setState(() => _locating = false);
+      return null;
     }
   }
 
+  Future<void> _locate() async {
+    setState(() => _locating = true);
+    final me = await _ensureLocation();
+    if (me != null && mounted) _map.move(me, 16);
+    if (mounted) setState(() => _locating = false);
+  }
+
+  /// Draws a walking route from the person to [to] and frames both ends.
+  Future<void> _drawRouteToDestination(LatLng to, String name) async {
+    setState(() => _routing = true);
+    try {
+      final me = await _ensureLocation();
+      if (me == null || !mounted) return;
+
+      final route = await Directions.walkingRoute(me, to);
+      if (!mounted) return;
+      setState(() {
+        _route = route;
+        _routeTo = name;
+      });
+
+      // Frame the whole walk, with room for the banner and the legend.
+      _map.fitCamera(
+        CameraFit.bounds(
+          bounds: LatLngBounds.fromPoints(route.points),
+          padding: const EdgeInsets.fromLTRB(50, 110, 50, 120),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _routing = false);
+    }
+  }
+
+  void _clearRoute() => setState(() {
+        _route = null;
+        _routeTo = null;
+      });
+
   void _openChurch(Church c) {
+    final dest = LatLng(c.lat, c.lng);
     showModalBottomSheet(
       context: context,
-      builder: (_) => _ChurchSheet(church: c),
+      builder: (_) => _ChurchSheet(
+        church: c,
+        me: _me,
+        onRoute: () {
+          Navigator.pop(context);
+          _drawRouteToDestination(dest, c.name);
+        },
+        onNavigate: () => Directions.openInMaps(dest),
+      ),
     );
   }
 
   void _openAttraction(CityItem a) {
+    final dest = LatLng(a.lat!, a.lng!);
     showModalBottomSheet(
       context: context,
-      builder: (_) => _AttractionSheet(item: a),
+      builder: (_) => _AttractionSheet(
+        item: a,
+        me: _me,
+        onRoute: () {
+          Navigator.pop(context);
+          _drawRouteToDestination(dest, a.title);
+        },
+        onNavigate: () => Directions.openInMaps(dest),
+      ),
     );
   }
 
@@ -97,6 +159,24 @@ class _TrailMapPageState extends State<TrailMapPage> {
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.be_mandaluyong',
               ),
+              // The walking route, under the pins so it never hides a stop.
+              if (_route != null)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _route!.points,
+                      strokeWidth: 6,
+                      // Gold for a real street route; a paler, thinner line
+                      // when it is only the straight-line fallback, so the two
+                      // are never mistaken for each other.
+                      color: _route!.isEstimate
+                          ? AppTheme.brandGold.withValues(alpha: 0.55)
+                          : AppTheme.brandGold,
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.white.withValues(alpha: 0.85),
+                    ),
+                  ],
+                ),
               // Tourist attractions
               MarkerLayer(
                 markers: [
@@ -147,6 +227,24 @@ class _TrailMapPageState extends State<TrailMapPage> {
             ],
           ),
           const Positioned(top: 10, left: 10, child: _Legend()),
+          if (_route != null)
+            Positioned(
+              left: AppSpacing.m,
+              right: AppSpacing.m,
+              bottom: AppSpacing.m,
+              child: _RouteBanner(
+                route: _route!,
+                destination: _routeTo ?? '',
+                onClear: _clearRoute,
+              ),
+            ),
+          if (_routing)
+            const Positioned.fill(
+              child: ColoredBox(
+                color: Color(0x33000000),
+                child: Center(child: CircularProgressIndicator()),
+              ),
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
@@ -225,9 +323,159 @@ class _MeDot extends StatelessWidget {
 }
 
 /// Bottom sheet shown when a church pin is tapped.
+/// The banner shown while a route is on the map: where it leads, how far, how
+/// long, and a way to clear it.
+class _RouteBanner extends StatelessWidget {
+  const _RouteBanner({
+    required this.route,
+    required this.destination,
+    required this.onClear,
+  });
+
+  final WalkingRoute route;
+  final String destination;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Material(
+      elevation: 4,
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      color: colors.surface,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.l, AppSpacing.m, AppSpacing.s, AppSpacing.m),
+        child: Row(
+          children: [
+            Icon(Icons.directions_walk_rounded, color: AppTheme.brandGold),
+            const SizedBox(width: AppSpacing.m),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    destination,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        text.bodyMedium?.copyWith(fontWeight: FontWeight.w700),
+                  ),
+                  Text(
+                    '${Directions.distanceLabel(route.meters)} · '
+                    '${Directions.durationLabel(route.seconds)} walk',
+                    style:
+                        text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+                  ),
+                  // Said plainly rather than passing a line through buildings
+                  // off as a route.
+                  if (route.isEstimate)
+                    Text(
+                      'Straight-line estimate — routing unavailable',
+                      style: text.labelSmall
+                          ?.copyWith(color: colors.onSurfaceVariant),
+                    ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Clear route',
+              onPressed: onClear,
+              icon: const Icon(Icons.close_rounded),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The distance line and the two "get me there" buttons, shared by the church
+/// and attraction sheets so both behave identically.
+class _DirectionsActions extends StatelessWidget {
+  const _DirectionsActions({
+    required this.me,
+    required this.destination,
+    required this.onRoute,
+    required this.onNavigate,
+  });
+
+  final LatLng? me;
+  final LatLng destination;
+  final VoidCallback onRoute;
+  final Future<bool> Function() onNavigate;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Only shown once we know where the person is; otherwise the button
+        // below asks for location first.
+        if (me != null) ...[
+          Row(
+            children: [
+              Icon(Icons.straighten_rounded, size: 16, color: colors.primary),
+              const SizedBox(width: 6),
+              Text(
+                '${Directions.distanceLabel(Directions.crowFlies(me!, destination))} away',
+                style: text.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.m),
+        ],
+        Row(
+          children: [
+            Expanded(
+              child: FilledButton.icon(
+                onPressed: onRoute,
+                icon: const Icon(Icons.directions_walk_rounded),
+                label: const Text('Show route'),
+              ),
+            ),
+            const SizedBox(width: AppSpacing.s),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  final ok = await onNavigate();
+                  if (!ok && context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('No maps app found on this phone.'),
+                      ),
+                    );
+                  }
+                },
+                icon: const Icon(Icons.navigation_outlined),
+                label: const Text('Navigate'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
 class _ChurchSheet extends StatelessWidget {
-  const _ChurchSheet({required this.church});
+  const _ChurchSheet({
+    required this.church,
+    required this.me,
+    required this.onRoute,
+    required this.onNavigate,
+  });
+
   final Church church;
+  final LatLng? me;
+  final VoidCallback onRoute;
+  final Future<bool> Function() onNavigate;
 
   @override
   Widget build(BuildContext context) {
@@ -276,9 +524,16 @@ class _ChurchSheet extends StatelessWidget {
               ),
             ],
             const SizedBox(height: AppSpacing.l),
+            _DirectionsActions(
+              me: me,
+              destination: LatLng(church.lat, church.lng),
+              onRoute: onRoute,
+              onNavigate: onNavigate,
+            ),
+            const SizedBox(height: AppSpacing.s),
             SizedBox(
               width: double.infinity,
-              child: FilledButton.icon(
+              child: TextButton.icon(
                 onPressed: () {
                   Navigator.pop(context);
                   Navigator.push(
@@ -325,8 +580,17 @@ class _AttractionPin extends StatelessWidget {
 
 /// Bottom sheet shown when an attraction pin is tapped.
 class _AttractionSheet extends StatelessWidget {
-  const _AttractionSheet({required this.item});
+  const _AttractionSheet({
+    required this.item,
+    required this.me,
+    required this.onRoute,
+    required this.onNavigate,
+  });
+
   final CityItem item;
+  final LatLng? me;
+  final VoidCallback onRoute;
+  final Future<bool> Function() onNavigate;
 
   @override
   Widget build(BuildContext context) {
@@ -372,9 +636,16 @@ class _AttractionSheet extends StatelessWidget {
               ],
             ),
             const SizedBox(height: AppSpacing.l),
+            _DirectionsActions(
+              me: me,
+              destination: LatLng(item.lat!, item.lng!),
+              onRoute: onRoute,
+              onNavigate: onNavigate,
+            ),
+            const SizedBox(height: AppSpacing.s),
             SizedBox(
               width: double.infinity,
-              child: FilledButton.icon(
+              child: TextButton.icon(
                 onPressed: () {
                   Navigator.pop(context);
                   Navigator.push(
