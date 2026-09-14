@@ -831,6 +831,26 @@ class _StaffReportPageState extends State<StaffReportPage> {
 
     setState(() => _sending = true);
     try {
+      // The "Staff Report" category is only honoured for a request carrying a
+      // staff token — without one the backend quietly files it as a general
+      // inquiry, which is the right call on its part (the endpoint is public,
+      // so a name and email in the body are claims, not proof) but would leave
+      // the officer thinking they had filed a report that the office will
+      // never see in the right place. So it is checked here first.
+      if (await TcimsApi.token == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            duration: Duration(seconds: 6),
+            content: Text(
+              'Not signed in to the office system, so this could not be filed '
+              'as a staff report. Sign out and back in, then try again.',
+            ),
+          ),
+        );
+        return;
+      }
+
       // No honeypot field is sent — including it would have the endpoint file
       // this silently as a bot submission while still answering "success".
       final res = await TcimsApi.postWithStatus('/api/inquiries.php', {
@@ -840,36 +860,18 @@ class _StaffReportPageState extends State<StaffReportPage> {
         'email': user?.email ?? '',
         'subject': 'Staff Operations Report — '
             '${now.day}/${now.month}/${now.year}',
-        'category': 'General Inquiry',
+        // Gives the report its own chip on the administrator's page, instead
+        // of sitting among tourists' questions.
+        'category': 'Staff Report',
         'message': summary,
       });
       if (!mounted) return;
 
       if (res.status == 200 || res.status == 201) {
-        // The endpoint returns a reference like INQ-2026-0007, but under a key
-        // we have not pinned down — so several are tried, and its absence is
-        // not treated as a failure. The report is filed either way.
-        String ref = '';
-        if (res.body is Map) {
-          final m = Map<String, dynamic>.from(res.body as Map);
-          final nested = m['data'] is Map
-              ? Map<String, dynamic>.from(m['data'] as Map)
-              : const <String, dynamic>{};
-          for (final key in [
-            'reference',
-            'reference_no',
-            'reference_number',
-            'inquiry_no',
-            'ref',
-            'ticket',
-          ]) {
-            final v = m[key] ?? nested[key];
-            if (v != null && v.toString().trim().isNotEmpty) {
-              ref = v.toString();
-              break;
-            }
-          }
-        }
+        // The endpoint returns its receipt as `ref_no`, e.g. INQ-2026-60002.
+        final ref = (res.body is Map)
+            ? (res.body['ref_no'] ?? '').toString().trim()
+            : '';
         await showDialog<void>(
           context: context,
           builder: (context) => AlertDialog(
