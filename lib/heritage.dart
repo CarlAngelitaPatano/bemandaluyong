@@ -652,7 +652,13 @@ class TrailProgress {
   /// session).
   static Future<void> syncWithCloud() async {
     // Pull anything verified on another platform (e.g. the website).
-    final remoteRaw = await TcimsApi.get('/api/visits.php');
+    //
+    // ?verified=1 matters. Without it the endpoint also returns casual
+    // "check in" taps made from the website's Explore page — no GPS, no photo
+    // proof. Counting those would let someone tap their way to a complete
+    // trail in the app, and the backend's own reward gate gets it right, so
+    // the app would promise a mug the server then refuses to issue.
+    final remoteRaw = await TcimsApi.get('/api/visits.php?verified=1');
     final remote =
         (remoteRaw is List) ? remoteRaw.cast<String>().toSet() : <String>{};
     if (remote.isNotEmpty) {
@@ -703,6 +709,37 @@ class TrailProgress {
   /// Re-syncs the current progress with the shared account (app ↔ website).
   static Future<void> pushToCloud() => syncWithCloud();
 
+  // -------------------------------------------------------------------------
+  // Heritage Mug reward
+  //
+  // Finishing the trail earns a physical reward collected from CCAT. The
+  // backend issues it, holds the claim code, and shows it to staff on the
+  // website's Rewards page — the code is what a tourist and an officer match
+  // against each other at the counter.
+  // -------------------------------------------------------------------------
+
+  /// This account's reward record, or null if none has been issued yet.
+  /// Shape: {id, reward, code, status, created_at, claimed_at}.
+  static Future<Map<String, dynamic>?> fetchReward() async {
+    final res = await TcimsApi.get('/api/claim_reward.php');
+    return res is Map<String, dynamic> ? res : null;
+  }
+
+  /// Asks the backend to issue the reward for this account.
+  ///
+  /// Safe to call optimistically: the server re-checks completion itself and
+  /// answers 400 when the trail is not genuinely finished, which TcimsApi
+  /// surfaces as null rather than an exception. Issuing is idempotent, so a
+  /// repeat call returns the existing reward instead of a second one.
+  ///
+  /// Returns null when the server declines or the device is offline.
+  static Future<Map<String, dynamic>?> claimReward() async {
+    final existing = await fetchReward();
+    if (existing != null && existing['code'] != null) return existing;
+    final res = await TcimsApi.post('/api/claim_reward.php', const {});
+    return res is Map<String, dynamic> && res['code'] != null ? res : null;
+  }
+
   /// Unlocks the entire trail in memory (used by the demo account). Not saved
   /// to device storage, so it only lasts for the current session — but it IS
   /// recorded on the shared database so the demo also looks complete when the
@@ -729,6 +766,36 @@ class HeritageTrailPage extends StatefulWidget {
 }
 
 class _HeritageTrailPageState extends State<HeritageTrailPage> {
+  /// The Heritage Mug record once the backend has issued it.
+  Map<String, dynamic>? _reward;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  /// Pulls anything verified elsewhere, then makes sure a finished trail has
+  /// its reward. Syncing here — rather than only at sign-in — means a visit
+  /// verified on the website shows up as soon as this page is opened, instead
+  /// of waiting for the app to be restarted.
+  Future<void> _refresh() async {
+    await TrailProgress.syncWithCloud();
+    if (!mounted) return;
+    setState(() {});
+    await _ensureReward();
+  }
+
+  /// Issues the reward if the trail is complete. The backend re-checks
+  /// completion itself and declines otherwise, so calling this is harmless
+  /// even when the app's own count is wrong.
+  Future<void> _ensureReward() async {
+    if (!TrailProgress.isComplete) return;
+    final reward = await TrailProgress.claimReward();
+    if (!mounted || reward == null) return;
+    setState(() => _reward = reward);
+  }
+
   Future<void> _verify(Church c) async {
     // The trail involves travelling to real locations, so it has a minimum
     // age requirement.
@@ -761,6 +828,8 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
       MaterialPageRoute(builder: (_) => VerifyVisitPage(church: c)),
     );
     if (mounted) setState(() {}); // refresh after returning
+    // That visit may have been the last one.
+    await _ensureReward();
   }
 
   Future<void> _claimCertificate() async {
@@ -855,7 +924,11 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
           if (complete) ...[
             PopIn(
               delayMs: 150,
-              child: _CompletionBanner(onClaim: _claimCertificate),
+              child: _CompletionBanner(
+                onClaim: _claimCertificate,
+                rewardCode: _reward?['code'] as String?,
+                rewardStatus: _reward?['status'] as String?,
+              ),
             ),
             const SizedBox(height: 20),
           ],
@@ -880,8 +953,21 @@ class _HeritageTrailPageState extends State<HeritageTrailPage> {
 
 /// Shown when every stop is visited.
 class _CompletionBanner extends StatelessWidget {
-  const _CompletionBanner({required this.onClaim});
+  const _CompletionBanner({
+    required this.onClaim,
+    this.rewardCode,
+    this.rewardStatus,
+  });
+
   final VoidCallback onClaim;
+
+  /// The claim code for the Heritage Mug, once the backend has issued one.
+  /// This is the string CCAT staff see on the website's Rewards page, so it is
+  /// what a tourist and an officer match against each other at the counter.
+  final String? rewardCode;
+
+  /// "Unclaimed" until an officer hands the mug over, then "Claimed".
+  final String? rewardStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -917,6 +1003,56 @@ class _CompletionBanner extends StatelessWidget {
             textAlign: TextAlign.center,
             style: TextStyle(color: Colors.white.withValues(alpha: 0.9)),
           ),
+          // The mug claim code, once the backend has issued it. Shown in a
+          // panel of its own and spaced out, because this is a string someone
+          // will read aloud or copy at a counter.
+          if (rewardCode != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: AppTheme.brandGold.withValues(alpha: 0.45)),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    'Heritage Mug claim code',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 11,
+                      letterSpacing: 0.4,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    rewardCode!,
+                    style: const TextStyle(
+                      color: AppTheme.brandGold,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    rewardStatus == 'Claimed'
+                        ? 'Claimed — thank you for walking the trail.'
+                        : 'Show this code at the CCAT office to collect '
+                            'your mug.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.9),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 14),
           FilledButton.icon(
             onPressed: onClaim,

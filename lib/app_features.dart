@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 
 import 'accreditation.dart';
+import 'analytics_dashboard.dart'; // staff: feedback analytics
 import 'announcements.dart'; // AnnouncementsPage + unread count for the badge
+import 'events_manager.dart'; // staff: manage city events
+import 'sentiment_eval.dart'; // staff: sentiment model accuracy report
+import 'staff_report.dart'; // staff: printable operations report
 import 'ar_view.dart';
 import 'attractions.dart';
 import 'city_content.dart';
@@ -124,6 +128,37 @@ List<AppFeature> cityServiceFeatures(UserRole role) => <AppFeature>[
             color: const Color(0xFF5E35B1),
             page: (_) => const EventRequestPage()),
       ],
+    ];
+
+/// The tools CCAT staff operate.
+///
+/// Staff get their own list rather than the visitor one. An officer has no use
+/// for itineraries or the heritage trail in a menu of things to *do* — what
+/// they need are the records they maintain: events, announcements, the
+/// requests and applications waiting on them, and the reports they file. Every
+/// entry here is something a staff account can actually act on.
+List<AppFeature> staffFeatures() => <AppFeature>[
+      AppFeature('Events', Icons.event_note_rounded,
+          color: const Color(0xFFE53935),
+          page: (_) => const EventsManagerPage()),
+      AppFeature('Event Requests', Icons.fact_check_outlined,
+          color: const Color(0xFF5E35B1),
+          page: (_) => const EventRequestsReviewPage()),
+      AppFeature('Announcements', Icons.campaign_rounded,
+          color: const Color(0xFF00838F),
+          page: (_) => const AnnouncementsPage()),
+      AppFeature('Accreditation', Icons.verified_outlined,
+          color: const Color(0xFF00695C),
+          page: (_) => const AccreditationPage()),
+      AppFeature('Feedback', Icons.insights_rounded,
+          color: const Color(0xFF1E88E5),
+          page: (_) => const AnalyticsDashboardPage()),
+      AppFeature('Report', Icons.summarize_rounded,
+          color: const Color(0xFF6D4C41),
+          page: (_) => const StaffReportPage()),
+      AppFeature('Model Accuracy', Icons.science_outlined,
+          color: const Color(0xFF00897B),
+          page: (_) => const SentimentEvalPage()),
     ];
 
 /// Always reachable, and deliberately kept out of the ordinary grids so it
