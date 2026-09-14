@@ -308,11 +308,17 @@ class _HomeShellState extends State<HomeShell> {
       body: _pages[_selectedIndex],
       // Services is the raised circle notched into the middle of the footer,
       // reachable from every tab rather than being a tab of its own.
-      floatingActionButton: const QuickMenuButton(),
+      //
+      // Staff do not get it. Their work lives on the staff console — the menu
+      // would only offer a second way into the same handful of screens, and a
+      // menu of visitor features to an officer is noise.
+      floatingActionButton:
+          StaffAccess.isStaff ? null : const QuickMenuButton(),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: _AppFooter(
         selectedIndex: _selectedIndex,
         onSelected: _onTab,
+        showServices: !StaffAccess.isStaff,
         destinations: StaffAccess.isStaff
             ? const [
                 _Destination(Icons.home_outlined, Icons.home, 'Home'),
@@ -352,11 +358,17 @@ class _AppFooter extends StatelessWidget {
     required this.selectedIndex,
     required this.onSelected,
     required this.destinations,
+    this.showServices = true,
   });
 
   final int selectedIndex;
   final ValueChanged<int> onSelected;
   final List<_Destination> destinations;
+
+  /// Whether to leave room for the docked Services circle. False for staff,
+  /// who have no such button — the bar is then a plain row of tabs, with no
+  /// notch cut into it for something that is not there.
+  final bool showServices;
 
   /// Width reserved for the notch and the "Services" label beneath it.
   static const double _notchSlot = 84;
@@ -368,6 +380,21 @@ class _AppFooter extends StatelessWidget {
     // Phones with a gesture bar reserve space along the bottom edge. The bar
     // grows by that much and pads itself, so the labels are never sat on.
     final inset = MediaQuery.viewPaddingOf(context).bottom;
+
+    // Without the Services circle there is nothing to make room for, so the
+    // tabs simply share the bar.
+    if (!showServices) {
+      return BottomAppBar(
+        height: footerHeight(context) + inset,
+        padding: EdgeInsets.only(bottom: inset),
+        child: Row(
+          children: [
+            for (var i = 0; i < destinations.length; i++)
+              Expanded(child: _tab(context, i)),
+          ],
+        ),
+      );
+    }
 
     // Split either side of the centre, rounding up so a lone extra tab sits
     // on the left, then pad the right to match.

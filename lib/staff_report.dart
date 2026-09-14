@@ -12,19 +12,49 @@ import 'theme.dart';
 import 'motion.dart';
 import 'events_manager.dart';
 import 'event_requests.dart';
+import 'announcements.dart'; // Announcement + its collection name
+import 'heritage.dart' show kChurches; // how many stops make a complete trail
+import 'tcims_api.dart'; // reviews and trail activity from the shared database
 
 // ===========================================================================
 // Staff operations report.
 //
-// Compiles the office's activity — events held, community requests, and
-// visitor feedback with its sentiment analysis — into a printable PDF or a
-// CSV for spreadsheets. Staff can then share it with the administrator
-// straight from the app (email, Drive, chat).
+// This is how the office reports upward. A staff member compiles what has
+// happened in the app — events held and upcoming, community requests received,
+// announcements published, visitor feedback with its sentiment, and
+// participation in the Heritage Trail — into a printable PDF or a CSV for
+// spreadsheets, then sends it to the administrator from the app.
+//
+// It draws on both stores: events, requests and announcements are the app's
+// own Firestore records, while reviews and trail check-ins come from the
+// shared database the website also reads, so the report cannot disagree with
+// the dashboard the administrator is looking at.
 // ===========================================================================
 
 class ReportData {
   final List<CityEvent> events;
   final List<EventRequest> requests;
+
+  /// Announcements staff published — the record of what was communicated.
+  final List<Announcement> announcements;
+
+  // --- Heritage Trail participation -----------------------------------------
+  // Read from the shared database, so it counts everyone, not just this phone.
+
+  /// False when the trail data could not be read. The report then says so
+  /// rather than printing zeroes an administrator would read as "nobody is
+  /// walking the trail".
+  final bool trailAvailable;
+
+  /// People who have verified at least one stop.
+  final int trailWalkers;
+
+  /// People who have verified every stop.
+  final int trailCompleted;
+
+  /// Verified visits per church, most visited first.
+  final Map<String, int> visitsByChurch;
+
   final int feedbackCount;
   final double averageRating;
   final int positive;
@@ -37,6 +67,11 @@ class ReportData {
   const ReportData({
     required this.events,
     required this.requests,
+    required this.announcements,
+    required this.trailAvailable,
+    required this.trailWalkers,
+    required this.trailCompleted,
+    required this.visitsByChurch,
     required this.feedbackCount,
     required this.averageRating,
     required this.positive,
@@ -46,12 +81,19 @@ class ReportData {
     required this.comments,
   });
 
+  /// Collects everything the report covers.
+  ///
+  /// Two sources, deliberately: events, requests and announcements are
+  /// Firestore records the app itself owns, while reviews live in the office's
+  /// shared database alongside the website's. This used to read feedback from
+  /// Firestore, which meant the report an administrator received disagreed
+  /// with the dashboard that administrator was looking at.
   static Future<ReportData> gather() async {
     final db = FirebaseFirestore.instance;
     final results = await Future.wait([
       db.collection(kEventsCollection).get(),
       db.collection(kEventRequestCollection).get(),
-      db.collection('feedback').get(),
+      db.collection(kAnnouncementCollection).get(),
     ]);
 
     final events = results[0].docs.map(CityEvent.fromDoc).toList()
@@ -59,15 +101,26 @@ class ReportData {
           .compareTo(b.startsAt ?? DateTime(2000)));
     final requests = results[1].docs.map(EventRequest.fromDoc).toList();
 
+    // What staff communicated to residents during the period. Parsed by the
+    // announcements feature's own reader, so the report cannot drift from it.
+    final announcements = results[2].docs.map(Announcement.fromDoc).toList()
+      ..sort((a, b) => (b.publishedAt ?? DateTime(2000))
+          .compareTo(a.publishedAt ?? DateTime(2000)));
+
     int pos = 0, neu = 0, neg = 0, rated = 0;
     double ratingSum = 0;
     final byCategory = <String, int>{};
     final comments =
         <({String category, String subject, int rating, String sentiment, String message})>[];
 
-    for (final d in results[2].docs) {
-      final m = d.data();
-      final s = (m['sentiment'] ?? 'neutral').toString();
+    // Reviews from the shared database — the same rows the website reports on.
+    final raw = await TcimsApi.get('/api/crud.php?table=reviews');
+    final rows = raw is List ? raw : const [];
+
+    for (final row in rows) {
+      if (row is! Map) continue;
+      // The server's own classification, not the shadow ml_sentiment.
+      final s = (row['sentiment'] ?? 'Neutral').toString().toLowerCase();
       if (s == 'positive') {
         pos++;
       } else if (s == 'negative') {
@@ -75,26 +128,78 @@ class ReportData {
       } else {
         neu++;
       }
-      final r = (m['rating'] as num?)?.toInt() ?? 0;
+      // mysqli returns every column as a string.
+      final r = int.tryParse('${row['rating'] ?? ''}') ?? 0;
       if (r > 0) {
         ratingSum += r;
         rated++;
       }
-      final cat = (m['category'] ?? 'Other').toString();
+      final place = (row['place'] ?? '').toString();
+      final cat = place.isEmpty ? 'General' : place;
       byCategory[cat] = (byCategory[cat] ?? 0) + 1;
       comments.add((
         category: cat,
-        subject: (m['subject'] ?? '').toString(),
+        subject: place,
         rating: r,
         sentiment: s,
-        message: (m['message'] ?? '').toString(),
+        message: (row['comment'] ?? '').toString(),
       ));
+    }
+
+    // ---- Heritage Trail participation -------------------------------------
+    //
+    // Counted from verified check-ins across every account. Written to survive
+    // a column not being where this expects it: anything unrecognised leaves
+    // trailAvailable false, and the report says the data was unavailable
+    // rather than printing a confident zero.
+    var trailAvailable = false;
+    var trailWalkers = 0;
+    var trailCompleted = 0;
+    final visitsByChurch = <String, int>{};
+
+    final visitsRaw = await TcimsApi.get('/api/crud.php?table=visits');
+    if (visitsRaw is List) {
+      // Distinct places per person — a place can appear twice for the same
+      // account, since visits.php toggles rather than sets.
+      final stopsPerUser = <String, Set<String>>{};
+
+      for (final v in visitsRaw) {
+        if (v is! Map) continue;
+        final place = (v['place'] ?? '').toString().trim();
+        final user = (v['user_id'] ?? '').toString().trim();
+        if (place.isEmpty || user.isEmpty) continue;
+
+        // Only genuine GPS-and-photo check-ins count. A missing column is
+        // treated as verified, since that is what visits used to mean.
+        final verifiedRaw = v['verified'];
+        final verified = verifiedRaw == null ||
+            verifiedRaw == 1 ||
+            verifiedRaw == true ||
+            '$verifiedRaw' == '1';
+        if (!verified) continue;
+
+        stopsPerUser.putIfAbsent(user, () => <String>{}).add(place);
+        visitsByChurch[place] = (visitsByChurch[place] ?? 0) + 1;
+      }
+
+      if (stopsPerUser.isNotEmpty || visitsRaw.isEmpty) {
+        trailAvailable = true;
+        trailWalkers = stopsPerUser.length;
+        trailCompleted = stopsPerUser.values
+            .where((stops) => stops.length >= kChurches.length)
+            .length;
+      }
     }
 
     return ReportData(
       events: events,
       requests: requests,
-      feedbackCount: results[2].docs.length,
+      announcements: announcements,
+      trailAvailable: trailAvailable,
+      trailWalkers: trailWalkers,
+      trailCompleted: trailCompleted,
+      visitsByChurch: visitsByChurch,
+      feedbackCount: rows.length,
       averageRating: rated == 0 ? 0 : ratingSum / rated,
       positive: pos,
       neutral: neu,
@@ -184,6 +289,7 @@ class ReportBuilder {
           // ---- Summary ----
           heading('1. Summary'),
           kv('Events on record', '${data.events.length}'),
+          kv('Announcements published', '${data.announcements.length}'),
           kv('Upcoming events', '$upcoming'),
           kv('Completed events', '$completed'),
           kv('Community event requests', '${data.requests.length}'),
@@ -269,9 +375,78 @@ class ReportBuilder {
               ],
             ),
 
+          // ---- Heritage Trail ----
+          heading('5. Heritage Trail participation'),
+          if (!data.trailAvailable)
+            pw.Text(
+              'Trail data could not be read from the office database for this '
+              'report.',
+              style: const pw.TextStyle(fontSize: 9),
+            )
+          else ...[
+            kv('Visitors who have started the trail', '${data.trailWalkers}'),
+            kv('Visitors who have completed all ${kChurches.length} stops',
+                '${data.trailCompleted}'),
+            kv('In progress',
+                '${data.trailWalkers - data.trailCompleted}'),
+            pw.SizedBox(height: 8),
+            if (data.visitsByChurch.isNotEmpty)
+              pw.TableHelper.fromTextArray(
+                headers: ['Church', 'Verified visits'],
+                headerStyle: pw.TextStyle(
+                    fontSize: 9,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColors.white),
+                headerDecoration: const pw.BoxDecoration(color: navy),
+                cellStyle: const pw.TextStyle(fontSize: 9),
+                columnWidths: {
+                  0: const pw.FlexColumnWidth(4),
+                  1: const pw.FlexColumnWidth(1.4),
+                },
+                data: [
+                  for (final e in (data.visitsByChurch.entries.toList()
+                        ..sort((a, b) => b.value.compareTo(a.value))))
+                    [e.key, '${e.value}'],
+                ],
+              ),
+          ],
+
+          // ---- Announcements ----
+          // The record of what the office told residents, and when.
+          heading('6. Announcements published'),
+          if (data.announcements.isEmpty)
+            pw.Text('No announcements published.',
+                style: const pw.TextStyle(fontSize: 9))
+          else
+            pw.TableHelper.fromTextArray(
+              headers: ['Announcement', 'Category', 'Published'],
+              headerStyle: pw.TextStyle(
+                  fontSize: 9,
+                  fontWeight: pw.FontWeight.bold,
+                  color: PdfColors.white),
+              headerDecoration: const pw.BoxDecoration(color: navy),
+              cellStyle: const pw.TextStyle(fontSize: 9),
+              columnWidths: {
+                0: const pw.FlexColumnWidth(3.4),
+                1: const pw.FlexColumnWidth(1.6),
+                2: const pw.FlexColumnWidth(2.0),
+              },
+              data: [
+                for (final a in data.announcements)
+                  [
+                    a.title,
+                    a.category,
+                    a.publishedAt == null
+                        ? '—'
+                        : '${a.publishedAt!.day}/${a.publishedAt!.month}/'
+                            '${a.publishedAt!.year}',
+                  ],
+              ],
+            ),
+
           // ---- Event reports ----
           if (data.events.any((e) => e.report.isNotEmpty)) ...[
-            heading('5. Event reports'),
+            heading('7. Event reports'),
             for (final e in data.events.where((e) => e.report.isNotEmpty))
               pw.Container(
                 margin: const pw.EdgeInsets.only(bottom: 8),
@@ -300,7 +475,7 @@ class ReportBuilder {
           ],
 
           // ---- Requests ----
-          heading('6. Community event requests'),
+          heading('8. Community event requests'),
           if (data.requests.isEmpty)
             pw.Text('No requests submitted.',
                 style: const pw.TextStyle(fontSize: 9))
@@ -351,6 +526,14 @@ class ReportBuilder {
     b.writeln('Metric,Value');
     b.writeln('Events on record,${data.events.length}');
     b.writeln('Community requests,${data.requests.length}');
+    b.writeln('Announcements published,${data.announcements.length}');
+    if (data.trailAvailable) {
+      b.writeln('Trail participants,${data.trailWalkers}');
+      b.writeln('Trail completions,${data.trailCompleted}');
+    } else {
+      b.writeln('Trail participants,unavailable');
+      b.writeln('Trail completions,unavailable');
+    }
     b.writeln('Feedback received,${data.feedbackCount}');
     b.writeln('Average rating,${data.averageRating.toStringAsFixed(2)}');
     b.writeln('Positive,${data.positive}');
@@ -509,6 +692,18 @@ class _StaffReportPageState extends State<StaffReportPage> {
                             _row('Events on record', '${d.events.length}'),
                             const Divider(height: 1),
                             _row('Community requests', '${d.requests.length}'),
+                            _row('Announcements published',
+                                '${d.announcements.length}'),
+                            _row(
+                                'Trail participants',
+                                d.trailAvailable
+                                    ? '${d.trailWalkers}'
+                                    : 'unavailable'),
+                            _row(
+                                'Trail completions',
+                                d.trailAvailable
+                                    ? '${d.trailCompleted}'
+                                    : 'unavailable'),
                             const Divider(height: 1),
                             _row('Feedback received', '${d.feedbackCount}'),
                             const Divider(height: 1),

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 
 import 'app_features.dart';
 import 'heritage.dart'; // kChurches, TrailProgress — for the featured card
-import 'staff_access.dart'; // is this account CCAT staff?
 import 'theme.dart';
 import 'user_role.dart';
 
@@ -223,31 +222,20 @@ class _QuickMenuSheet extends StatelessWidget {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
     final role = UserRoleStore.current;
-    final isStaff = StaffAccess.isStaff;
 
-    // Staff see only what they operate. Offering an officer itineraries and
-    // the heritage trail in a menu of things to *do* is noise — their menu is
-    // the records they maintain and the items waiting on them.
-    final sections = isStaff
-        ? <_Section>[
-            _Section('CCAT tools', staffFeatures()),
-            _Section('Urgent', [emergencyFeature()]),
-          ]
-        : () {
-            // Residents lead with city business; visitors lead with places to
-            // go. The trail is left out of the grid — it gets the featured
-            // card above.
-            final explore = exploreFeatures(includeTrail: false);
-            final city = cityServiceFeatures(role);
-            final leadsWithCity = role == UserRole.mandaleno;
-            return <_Section>[
-              _Section(role.primarySectionTitle,
-                  leadsWithCity ? city : explore),
-              _Section(role.secondarySectionTitle,
-                  leadsWithCity ? explore : city),
-              _Section('Urgent', [emergencyFeature()]),
-            ];
-          }();
+    // This menu is for visitors and residents only — staff reach their tools
+    // from the staff console, and never see the Services button at all.
+    //
+    // Residents lead with city business; visitors lead with places to go. The
+    // trail is left out of the grid because it gets the featured card above.
+    final explore = exploreFeatures(includeTrail: false);
+    final city = cityServiceFeatures(role);
+    final leadsWithCity = role == UserRole.mandaleno;
+    final sections = <_Section>[
+      _Section(role.primarySectionTitle, leadsWithCity ? city : explore),
+      _Section(role.secondarySectionTitle, leadsWithCity ? explore : city),
+      _Section('Urgent', [emergencyFeature()]),
+    ];
 
     return Material(
       type: MaterialType.transparency,
@@ -290,9 +278,7 @@ class _QuickMenuSheet extends StatelessWidget {
                               ),
                             ),
                             Text(
-                              isStaff
-                                  ? 'Tools for CCAT staff'
-                                  : 'Everything Be@Mandaluyong can do',
+                              'Everything Be@Mandaluyong can do',
                               style: text.bodySmall
                                   ?.copyWith(color: colors.onSurfaceVariant),
                             ),
@@ -321,15 +307,12 @@ class _QuickMenuSheet extends StatelessWidget {
                     children: [
                       // The flagship feature leads, with progress on it, so
                       // the sheet opens on something that says where you are
-                      // rather than twelve identical circles. Staff do not
-                      // walk the trail, so they do not get the card.
-                      if (!isStaff) ...[
-                        _TrailCard(
-                          animation: animation,
-                          onTap: () => _open(context, heritageTrailFeature()),
-                        ),
-                        const SizedBox(height: AppSpacing.l),
-                      ],
+                      // rather than twelve identical circles.
+                      _TrailCard(
+                        animation: animation,
+                        onTap: () => _open(context, heritageTrailFeature()),
+                      ),
+                      const SizedBox(height: AppSpacing.l),
                       for (var i = 0; i < sections.length; i++) ...[
                         _SectionBlock(
                           section: sections[i],
