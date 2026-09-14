@@ -46,14 +46,30 @@ class ReportData {
   /// walking the trail".
   final bool trailAvailable;
 
+  /// Stops that make a complete trail, as the SERVER counts them.
+  final int trailTotal;
+
   /// People who have verified at least one stop.
   final int trailWalkers;
 
   /// People who have verified every stop.
   final int trailCompleted;
 
+  /// Verified check-ins across all accounts.
+  final int trailCheckins;
+
   /// Verified visits per church, most visited first.
   final Map<String, int> visitsByChurch;
+
+  /// Per-visitor progress, for the detail table.
+  final List<
+      ({
+        String who,
+        int done,
+        String status,
+        String? rewardCode,
+        String? rewardStatus
+      })> trailVisitors;
 
   final int feedbackCount;
   final double averageRating;
@@ -69,9 +85,12 @@ class ReportData {
     required this.requests,
     required this.announcements,
     required this.trailAvailable,
+    required this.trailTotal,
     required this.trailWalkers,
     required this.trailCompleted,
+    required this.trailCheckins,
     required this.visitsByChurch,
+    required this.trailVisitors,
     required this.feedbackCount,
     required this.averageRating,
     required this.positive,
@@ -148,46 +167,65 @@ class ReportData {
 
     // ---- Heritage Trail participation -------------------------------------
     //
-    // Counted from verified check-ins across every account. Written to survive
-    // a column not being where this expects it: anything unrecognised leaves
-    // trailAvailable false, and the report says the data was unavailable
-    // rather than printing a confident zero.
+    // Read from the backend's own trail_progress endpoint rather than counted
+    // from raw visit rows. That matters: the endpoint applies the SAME church
+    // list and verified-only rule as the reward gate, so this report cannot
+    // claim someone finished 9 of 9 while the server refuses them the mug.
+    // Aggregating it here by hand is exactly how the 9-versus-12 mismatch and
+    // the countable Explore taps went unnoticed.
     var trailAvailable = false;
+    var trailTotal = kChurches.length;
     var trailWalkers = 0;
     var trailCompleted = 0;
+    var trailCheckins = 0;
     final visitsByChurch = <String, int>{};
+    final trailVisitors = <({
+      String who,
+      int done,
+      String status,
+      String? rewardCode,
+      String? rewardStatus
+    })>[];
 
-    final visitsRaw = await TcimsApi.get('/api/crud.php?table=visits');
-    if (visitsRaw is List) {
-      // Distinct places per person — a place can appear twice for the same
-      // account, since visits.php toggles rather than sets.
-      final stopsPerUser = <String, Set<String>>{};
+    final trail = await TcimsApi.get('/api/trail_progress.php');
+    if (trail is Map<String, dynamic>) {
+      trailAvailable = true;
+      trailTotal = (trail['total'] as num?)?.toInt() ?? kChurches.length;
 
-      for (final v in visitsRaw) {
-        if (v is! Map) continue;
-        final place = (v['place'] ?? '').toString().trim();
-        final user = (v['user_id'] ?? '').toString().trim();
-        if (place.isEmpty || user.isEmpty) continue;
-
-        // Only genuine GPS-and-photo check-ins count. A missing column is
-        // treated as verified, since that is what visits used to mean.
-        final verifiedRaw = v['verified'];
-        final verified = verifiedRaw == null ||
-            verifiedRaw == 1 ||
-            verifiedRaw == true ||
-            '$verifiedRaw' == '1';
-        if (!verified) continue;
-
-        stopsPerUser.putIfAbsent(user, () => <String>{}).add(place);
-        visitsByChurch[place] = (visitsByChurch[place] ?? 0) + 1;
+      final summary = trail['summary'];
+      if (summary is Map) {
+        trailWalkers = (summary['walkers'] as num?)?.toInt() ?? 0;
+        trailCompleted = (summary['completed'] as num?)?.toInt() ?? 0;
+        trailCheckins = (summary['verified_checkins'] as num?)?.toInt() ?? 0;
       }
 
-      if (stopsPerUser.isNotEmpty || visitsRaw.isEmpty) {
-        trailAvailable = true;
-        trailWalkers = stopsPerUser.length;
-        trailCompleted = stopsPerUser.values
-            .where((stops) => stops.length >= kChurches.length)
-            .length;
+      final tourists = trail['tourists'];
+      if (tourists is List) {
+        for (final t in tourists) {
+          if (t is! Map) continue;
+          // Username is often null; the email is what identifies someone at a
+          // counter, so it is the fallback rather than a bare user id.
+          final who = (t['username'] ?? '').toString().trim().isNotEmpty
+              ? t['username'].toString()
+              : (t['email'] ?? 'user ${t['user_id']}').toString();
+
+          trailVisitors.add((
+            who: who,
+            done: (t['done'] as num?)?.toInt() ?? 0,
+            status: (t['status'] ?? '').toString(),
+            rewardCode: t['reward_code']?.toString(),
+            rewardStatus: t['reward_status']?.toString(),
+          ));
+
+          final places = t['places'];
+          if (places is List) {
+            for (final p in places) {
+              final name = p.toString();
+              visitsByChurch[name] = (visitsByChurch[name] ?? 0) + 1;
+            }
+          }
+        }
+        trailVisitors.sort((a, b) => b.done.compareTo(a.done));
       }
     }
 
@@ -196,9 +234,12 @@ class ReportData {
       requests: requests,
       announcements: announcements,
       trailAvailable: trailAvailable,
+      trailTotal: trailTotal,
       trailWalkers: trailWalkers,
       trailCompleted: trailCompleted,
+      trailCheckins: trailCheckins,
       visitsByChurch: visitsByChurch,
+      trailVisitors: trailVisitors,
       feedbackCount: rows.length,
       averageRating: rated == 0 ? 0 : ratingSum / rated,
       positive: pos,
@@ -212,6 +253,71 @@ class ReportData {
 
 class ReportBuilder {
   ReportBuilder._();
+
+  /// The report condensed into plain text for the administrator's inbox.
+  ///
+  /// `inquiries.php` accepts between 10 and 2000 characters, so this is a
+  /// summary rather than the whole document — the figures an administrator
+  /// needs to see at a glance, plus the complaints worth reading in full. The
+  /// PDF remains the complete record and can still be shared alongside it.
+  static String summaryText(ReportData d) {
+    final b = StringBuffer();
+    final now = DateTime.now();
+
+    b.writeln('BE@MANDALUYONG — STAFF OPERATIONS REPORT');
+    b.writeln('Compiled ${now.day}/${now.month}/${now.year}');
+    b.writeln('');
+
+    b.writeln('ACTIVITY');
+    b.writeln('- Events on record: ${d.events.length}');
+    b.writeln('- Announcements published: ${d.announcements.length}');
+    b.writeln('- Community event requests: ${d.requests.length}');
+    b.writeln('');
+
+    b.writeln('VISITOR FEEDBACK');
+    b.writeln('- Reviews received: ${d.feedbackCount}');
+    if (d.feedbackCount > 0) {
+      b.writeln('- Average rating: ${d.averageRating.toStringAsFixed(2)} / 5');
+      b.writeln('- Positive ${d.positive} | Neutral ${d.neutral} '
+          '| Negative ${d.negative}');
+    }
+    b.writeln('');
+
+    b.writeln('HERITAGE TRAIL');
+    if (!d.trailAvailable) {
+      b.writeln('- Trail data unavailable when this report was compiled.');
+    } else {
+      b.writeln('- Started the trail: ${d.trailWalkers}');
+      b.writeln('- Completed all ${d.trailTotal} stops: ${d.trailCompleted}');
+      b.writeln('- Verified check-ins: ${d.trailCheckins}');
+      final claimed = d.trailVisitors.where((v) => v.rewardCode != null);
+      if (claimed.isNotEmpty) {
+        b.writeln('- Mug rewards issued: ${claimed.length}');
+      }
+    }
+
+    // Negative comments are the part an administrator most needs in words
+    // rather than as a number, so they go last and get the remaining room.
+    final negatives =
+        d.comments.where((c) => c.sentiment.toLowerCase() == 'negative');
+    if (negatives.isNotEmpty) {
+      b.writeln('');
+      b.writeln('COMPLAINTS RAISED');
+      for (final c in negatives.take(5)) {
+        final msg = c.message.length > 140
+            ? '${c.message.substring(0, 140)}…'
+            : c.message;
+        b.writeln('- ${c.subject.isEmpty ? c.category : c.subject}: $msg');
+      }
+    }
+
+    final out = b.toString().trim();
+    // Hard cap with an honest marker, so nothing is silently lost.
+    const limit = 1980;
+    return out.length <= limit
+        ? out
+        : '${out.substring(0, limit)}\n[truncated — see attached PDF]';
+  }
 
   static String _today() {
     const months = [
@@ -385,11 +491,41 @@ class ReportBuilder {
             )
           else ...[
             kv('Visitors who have started the trail', '${data.trailWalkers}'),
-            kv('Visitors who have completed all ${kChurches.length} stops',
+            kv('Visitors who have completed all ${data.trailTotal} stops',
                 '${data.trailCompleted}'),
             kv('In progress',
                 '${data.trailWalkers - data.trailCompleted}'),
+            kv('Verified check-ins', '${data.trailCheckins}'),
             pw.SizedBox(height: 8),
+            if (data.trailVisitors.isNotEmpty) ...[
+              pw.TableHelper.fromTextArray(
+                headers: ['Visitor', 'Stops', 'Status', 'Mug code'],
+                headerStyle: pw.TextStyle(
+                    fontSize: 9,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColors.white),
+                headerDecoration: const pw.BoxDecoration(color: navy),
+                cellStyle: const pw.TextStyle(fontSize: 9),
+                columnWidths: {
+                  0: const pw.FlexColumnWidth(3.2),
+                  1: const pw.FlexColumnWidth(1.1),
+                  2: const pw.FlexColumnWidth(1.6),
+                  3: const pw.FlexColumnWidth(1.8),
+                },
+                data: [
+                  for (final v in data.trailVisitors)
+                    [
+                      v.who,
+                      '${v.done}/${data.trailTotal}',
+                      v.status,
+                      v.rewardCode == null
+                          ? '—'
+                          : '${v.rewardCode} (${v.rewardStatus ?? '—'})',
+                    ],
+                ],
+              ),
+              pw.SizedBox(height: 8),
+            ],
             if (data.visitsByChurch.isNotEmpty)
               pw.TableHelper.fromTextArray(
                 headers: ['Church', 'Verified visits'],
@@ -601,7 +737,15 @@ class StaffReportPage extends StatefulWidget {
 
 class _StaffReportPageState extends State<StaffReportPage> {
   ReportData? _data;
+
+  /// Building a PDF or CSV.
   bool _busy = false;
+
+  /// Filing the report upward. Kept apart from [_busy] so the two buttons do
+  /// not describe each other's work — the PDF button said "Preparing…" while
+  /// the submit dialog was open, which was simply untrue.
+  bool _sending = false;
+
   String? _error;
 
   @override
@@ -645,6 +789,127 @@ class _StaffReportPageState extends State<StaffReportPage> {
       }
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Sends the report to the administrator, who reads it on the website.
+  ///
+  /// This is the whole point of the screen: an officer compiles what happened
+  /// and files it upward. The share sheet remains for sending the full PDF
+  /// alongside, but the summary lands in the administrator's inbox directly.
+  Future<void> _sendToAdmin() async {
+    final data = _data;
+    if (data == null) return;
+
+    final user = FirebaseAuth.instance.currentUser;
+    final summary = ReportBuilder.summaryText(data);
+    final now = DateTime.now();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Send to the administrator?'),
+        content: Text(
+          'This files a summary of the report to the City Cultural Affairs '
+          'and Tourism administrator, who reads it on the CCAT website.\n\n'
+          'The full PDF can still be shared separately.',
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Send'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _sending = true);
+    try {
+      // No honeypot field is sent — including it would have the endpoint file
+      // this silently as a bot submission while still answering "success".
+      final res = await TcimsApi.postWithStatus('/api/inquiries.php', {
+        'name': user?.displayName?.trim().isNotEmpty == true
+            ? user!.displayName!.trim()
+            : 'CCAT Staff',
+        'email': user?.email ?? '',
+        'subject': 'Staff Operations Report — '
+            '${now.day}/${now.month}/${now.year}',
+        'category': 'General Inquiry',
+        'message': summary,
+      });
+      if (!mounted) return;
+
+      if (res.status == 200 || res.status == 201) {
+        // The endpoint returns a reference like INQ-2026-0007, but under a key
+        // we have not pinned down — so several are tried, and its absence is
+        // not treated as a failure. The report is filed either way.
+        String ref = '';
+        if (res.body is Map) {
+          final m = Map<String, dynamic>.from(res.body as Map);
+          final nested = m['data'] is Map
+              ? Map<String, dynamic>.from(m['data'] as Map)
+              : const <String, dynamic>{};
+          for (final key in [
+            'reference',
+            'reference_no',
+            'reference_number',
+            'inquiry_no',
+            'ref',
+            'ticket',
+          ]) {
+            final v = m[key] ?? nested[key];
+            if (v != null && v.toString().trim().isNotEmpty) {
+              ref = v.toString();
+              break;
+            }
+          }
+        }
+        await showDialog<void>(
+          context: context,
+          builder: (context) => AlertDialog(
+            icon: const Icon(Icons.mark_email_read_outlined,
+                color: AppTheme.brandGold, size: 40),
+            title: const Text('Report filed'),
+            content: Text(
+              ref.isEmpty
+                  ? 'The administrator has received your report.'
+                  : 'The administrator has received your report.\n\n'
+                      'Reference: $ref',
+            ),
+            actions: [
+              FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Done'),
+              ),
+            ],
+          ),
+        );
+      } else {
+        // Told apart on purpose: a rate limit is not a broken report, and an
+        // officer who is simply too quick should be told to wait, not to
+        // rewrite anything.
+        final message = switch (res.status) {
+          429 => 'Too many reports sent from this connection in the last '
+              'hour. Please try again later.',
+          400 || 422 =>
+            'The administrator\'s inbox rejected this report. It may be too '
+                'short or too long to file.',
+          0 => 'Could not reach the office. Check your connection and try '
+              'again.',
+          _ => 'The report could not be filed (error ${res.status}).',
+        };
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), duration: const Duration(seconds: 5)),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _sending = false);
     }
   }
 
@@ -717,11 +982,35 @@ class _StaffReportPageState extends State<StaffReportPage> {
                       ),
                     ),
                     const SizedBox(height: AppSpacing.xl),
+                    // Filing it upward is the primary action, so it leads.
+                    Reveal(
+                      delayMs: 100,
+                      child: FilledButton.icon(
+                        onPressed: (_busy || _sending) ? null : _sendToAdmin,
+                        style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                              vertical: AppSpacing.m),
+                          backgroundColor: AppTheme.brandGold,
+                          foregroundColor: const Color(0xFF12305F),
+                        ),
+                        icon: _sending
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF12305F)))
+                            : const Icon(Icons.send_rounded),
+                        label: Text(
+                            _sending ? 'Filing…' : 'Submit to administrator'),
+                      ),
+                    ),
+                    const SizedBox(height: AppSpacing.m),
                     Reveal(
                       delayMs: 120,
-                      child: FilledButton.icon(
+                      child: OutlinedButton.icon(
                         onPressed: _busy ? null : () => _share(pdf: true),
-                        style: FilledButton.styleFrom(
+                        style: OutlinedButton.styleFrom(
                           padding: const EdgeInsets.symmetric(
                               vertical: AppSpacing.m),
                         ),
@@ -734,7 +1023,7 @@ class _StaffReportPageState extends State<StaffReportPage> {
                             : const Icon(Icons.picture_as_pdf_outlined),
                         label: Text(_busy
                             ? 'Preparing…'
-                            : 'Generate PDF and send'),
+                            : 'Generate PDF and share'),
                       ),
                     ),
                     const SizedBox(height: AppSpacing.m),

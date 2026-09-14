@@ -218,6 +218,36 @@ class TcimsApi {
     }
   }
 
+  /// POST that reports the HTTP status alongside the body.
+  ///
+  /// [post] collapses every failure into null, which is fine when the only
+  /// question is "did it work". Some endpoints fail for reasons worth telling
+  /// the person apart — a rate limit is not a validation error, and neither is
+  /// being offline. Status 0 means the request never completed.
+  static Future<({int status, dynamic body})> postWithStatus(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl$path'),
+            headers: await _authHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 35));
+      dynamic parsed;
+      try {
+        parsed = jsonDecode(res.body);
+      } catch (_) {
+        parsed = null;
+      }
+      return (status: res.statusCode, body: parsed);
+    } catch (_) {
+      return (status: 0, body: null);
+    }
+  }
+
   /// Multipart POST (for the photo check-in endpoint). [fields] are plain
   /// text fields; [files] maps a form field name (e.g. 'selfie') to a local
   /// file path. Returns the decoded JSON body on 200, or null on failure.

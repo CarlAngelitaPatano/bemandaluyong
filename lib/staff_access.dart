@@ -45,10 +45,15 @@ class StaffAccess {
   /// These accounts are created by an approver through the website's User
   /// Management — the app cannot grant them, and a sign-in never changes the
   /// role already on record.
+  /// Compared in lower case; the backend's own strings are "Super Admin",
+  /// "CCAT Admin", "CCAT Staff", and a legacy lower-case "admin" still held by
+  /// some older accounts. Casing is only relaxed for this comparison — a role
+  /// string is never re-cased before being sent anywhere.
   static const Set<String> _staffRoles = {
     'ccat staff',
     'ccat admin',
     'super admin',
+    'admin', // legacy accounts
   };
 
   /// Determines whether the signed-in account is CCAT staff.
