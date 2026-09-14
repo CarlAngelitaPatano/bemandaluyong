@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'tcims_api.dart'; // the backend's own record of what this account is
+
 // ===========================================================================
 // CCAT access control (mobile app).
 //
@@ -38,7 +40,27 @@ class StaffAccess {
   /// True for any registered CCAT account.
   static bool get isStaff => role == CcatRole.staff;
 
+  /// Backend roles that may operate the CCAT tools.
+  ///
+  /// These accounts are created by an approver through the website's User
+  /// Management — the app cannot grant them, and a sign-in never changes the
+  /// role already on record.
+  static const Set<String> _staffRoles = {
+    'ccat staff',
+    'ccat admin',
+    'super admin',
+  };
+
   /// Determines whether the signed-in account is CCAT staff.
+  ///
+  /// The backend's `users.role` is the authority. The app once kept its own
+  /// `staff` collection in Firestore, which meant two registries that could
+  /// disagree about the same person; that is now only a fallback for when the
+  /// backend could not be reached.
+  ///
+  /// This decides what the app SHOWS. It is not a security control — every
+  /// staff endpoint is gated server-side, so an account that talked its way
+  /// past this would still be refused by the office.
   static Future<CcatRole> check() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -52,6 +74,17 @@ class StaffAccess {
       return role;
     }
 
+    // What the office says this account is.
+    final backend = (TcimsApi.backendRole ?? await TcimsApi.loadRole())
+        ?.trim()
+        .toLowerCase();
+    if (backend != null && backend.isNotEmpty) {
+      role = _staffRoles.contains(backend) ? CcatRole.staff : CcatRole.none;
+      return role;
+    }
+
+    // Offline, or the token exchange failed this session — fall back to the
+    // legacy Firestore registry rather than locking an officer out.
     try {
       final doc = await FirebaseFirestore.instance
           .collection(collection)

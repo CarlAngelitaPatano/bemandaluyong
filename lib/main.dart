@@ -186,7 +186,12 @@ class _HomeShellState extends State<HomeShell> {
     // Date of birth — drives the Heritage Trail age requirement.
     UserProfileStore.load();
     // Is this account CCAT staff? Changes the whole home screen.
-    StaffAccess.check().then((_) {
+    //
+    // Chained after the token exchange, because that call is what brings back
+    // the backend's own record of this account's role. Checking earlier would
+    // read a role from a previous session, or none at all on a first sign-in,
+    // and an officer would see the visitor app until they restarted.
+    tokenReady.then((_) => StaffAccess.check()).then((_) {
       if (mounted) setState(() {});
     });
   }
