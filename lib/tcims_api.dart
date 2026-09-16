@@ -87,6 +87,28 @@ class TcimsApi {
   static bool get isSignedIn => _cachedToken != null;
 
   // -------------------------------------------------------------------------
+  // Timestamps
+  // -------------------------------------------------------------------------
+
+  /// Parses a datetime the backend returned, in Manila time.
+  ///
+  /// The server stores and returns UTC, but writes it as "2026-09-11 03:17:20"
+  /// with no zone marker. Dart reads an unmarked string as LOCAL time, so
+  /// calling .toLocal() on it does nothing at all — every timestamp in the app
+  /// was being shown eight hours early, quietly, with nothing to suggest it.
+  ///
+  /// Marking it UTC before converting is the whole fix.
+  static DateTime? parseServerTime(Object? raw) {
+    final s = raw?.toString().trim();
+    if (s == null || s.isEmpty) return null;
+    // Already carries a zone (ISO-8601 with Z or an offset)? Trust it.
+    if (s.endsWith('Z') || RegExp(r'[+-]\d{2}:?\d{2}$').hasMatch(s)) {
+      return DateTime.tryParse(s)?.toLocal();
+    }
+    return DateTime.tryParse('${s.replaceFirst(' ', 'T')}Z')?.toLocal();
+  }
+
+  // -------------------------------------------------------------------------
   // Cold starts
   // -------------------------------------------------------------------------
 
@@ -215,6 +237,43 @@ class TcimsApi {
       return jsonDecode(res.body);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// PUT a JSON body. Returns the decoded body on 200, or null on failure.
+  static Future<dynamic> put(String path, Map<String, dynamic> body) async {
+    try {
+      final res = await http
+          .put(
+            Uri.parse('$baseUrl$path'),
+            headers: await _authHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 35));
+      if (res.statusCode == 401) {
+        await clearToken();
+        return null;
+      }
+      if (res.statusCode != 200) return null;
+      return jsonDecode(res.body);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// DELETE. Returns true when the server confirms the record is gone.
+  static Future<bool> delete(String path) async {
+    try {
+      final res = await http
+          .delete(Uri.parse('$baseUrl$path'), headers: await _authHeaders())
+          .timeout(const Duration(seconds: 25));
+      if (res.statusCode == 401) {
+        await clearToken();
+        return false;
+      }
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
     }
   }
 

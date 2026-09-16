@@ -110,19 +110,19 @@ class ReportData {
   static Future<ReportData> gather() async {
     final db = FirebaseFirestore.instance;
     final results = await Future.wait([
-      db.collection(kEventsCollection).get(),
       db.collection(kEventRequestCollection).get(),
       db.collection(kAnnouncementCollection).get(),
     ]);
 
-    final events = results[0].docs.map(CityEvent.fromDoc).toList()
-      ..sort((a, b) => (a.startsAt ?? DateTime(2000))
-          .compareTo(b.startsAt ?? DateTime(2000)));
-    final requests = results[1].docs.map(EventRequest.fromDoc).toList();
+    // Events now come from the shared database — the same rows the
+    // administrator approves — so the report reflects what the office has
+    // actually cleared, not what was drafted in the app.
+    final events = await EventsService.list();
+    final requests = results[0].docs.map(EventRequest.fromDoc).toList();
 
     // What staff communicated to residents during the period. Parsed by the
     // announcements feature's own reader, so the report cannot drift from it.
-    final announcements = results[2].docs.map(Announcement.fromDoc).toList()
+    final announcements = results[1].docs.map(Announcement.fromDoc).toList()
       ..sort((a, b) => (b.publishedAt ?? DateTime(2000))
           .compareTo(a.publishedAt ?? DateTime(2000)));
 

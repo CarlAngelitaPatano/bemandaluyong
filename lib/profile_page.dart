@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'auth_pages.dart'; // RoleSelectPage (welcome screen) for logout
+import 'session.dart'; // clears everything the account left behind
 import 'heritage.dart'; // TrailProgress, kChurches, HeritageTrailPage
 import 'theme.dart'; // AppTheme.cityRed
 import 'theme_controller.dart'; // light/dark/system setting
@@ -390,7 +391,10 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _logout() async {
-    await FirebaseAuth.instance.signOut();
+    // Not FirebaseAuth.signOut() on its own — that leaves the office's api
+    // token, the trail progress and the cached role behind for whoever signs
+    // in next. See session.dart.
+    await AppSession.signOut();
     if (!mounted) return;
     Navigator.pushAndRemoveUntil(
       context,

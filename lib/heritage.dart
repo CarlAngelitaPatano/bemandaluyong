@@ -611,8 +611,25 @@ class _InfoChip extends StatelessWidget {
 class TrailProgress {
   TrailProgress._();
 
-  static const String _visitedKey = 'verified_churches';
-  static const String _proofsKey = 'church_proofs';
+  // Storage keys are scoped to the signed-in account.
+  //
+  // They were once plain 'verified_churches' and 'church_proofs' — one key
+  // shared by everyone who used the phone. Signing out and signing in as
+  // somebody else loaded the previous person's trail, and the next sync
+  // pushed their check-ins up under the new account. Anyone testing on one
+  // handset saw it as accounts bleeding into each other.
+  //
+  // The uid keeps them apart. Signed out, nothing is written at all.
+  static String? _uid() => FirebaseAuth.instance.currentUser?.uid;
+  static String? _visitedKeyFor() {
+    final uid = _uid();
+    return uid == null ? null : 'verified_churches_$uid';
+  }
+
+  static String? _proofsKeyFor() {
+    final uid = _uid();
+    return uid == null ? null : 'church_proofs_$uid';
+  }
 
   /// Churches verified by submitting photo proof.
   static final Set<String> visited = <String>{};
@@ -624,14 +641,22 @@ class TrailProgress {
   static bool get isComplete =>
       kChurches.isNotEmpty && visited.length >= kChurches.length;
 
-  /// Loads saved progress from device storage. Call once at startup.
+  /// Loads this account's saved progress. Call after sign-in and at startup.
+  ///
+  /// Always starts by emptying what is in memory: these are static fields that
+  /// outlive a sign-out, so without the clear, a second account would inherit
+  /// whatever the first had left behind.
   static Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    visited
-      ..clear()
-      ..addAll(prefs.getStringList(_visitedKey) ?? const []);
+    visited.clear();
     proofs.clear();
-    final raw = prefs.getString(_proofsKey);
+
+    final visitedKey = _visitedKeyFor();
+    final proofsKey = _proofsKeyFor();
+    if (visitedKey == null || proofsKey == null) return; // signed out
+
+    final prefs = await SharedPreferences.getInstance();
+    visited.addAll(prefs.getStringList(visitedKey) ?? const []);
+    final raw = prefs.getString(proofsKey);
     if (raw != null) {
       final decoded = jsonDecode(raw) as Map<String, dynamic>;
       decoded.forEach((key, value) {
@@ -640,10 +665,28 @@ class TrailProgress {
     }
   }
 
-  static Future<void> _save() async {
+  /// Forgets this device's copy of the trail, in memory and on disk.
+  /// Used on sign-out; the account's real progress stays on the server.
+  static Future<void> clear() async {
+    visited.clear();
+    proofs.clear();
+    final visitedKey = _visitedKeyFor();
+    final proofsKey = _proofsKeyFor();
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_visitedKey, visited.toList());
-    await prefs.setString(_proofsKey, jsonEncode(proofs));
+    if (visitedKey != null) await prefs.remove(visitedKey);
+    if (proofsKey != null) await prefs.remove(proofsKey);
+    // The old shared keys, from before progress was scoped per account.
+    await prefs.remove('verified_churches');
+    await prefs.remove('church_proofs');
+  }
+
+  static Future<void> _save() async {
+    final visitedKey = _visitedKeyFor();
+    final proofsKey = _proofsKeyFor();
+    if (visitedKey == null || proofsKey == null) return; // signed out
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(visitedKey, visited.toList());
+    await prefs.setString(proofsKey, jsonEncode(proofs));
   }
 
   /// Merges this device's progress with the account's progress in the shared

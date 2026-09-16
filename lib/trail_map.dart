@@ -19,7 +19,19 @@ const Color _attractionColor = AppTheme.brandGold;
 // an OpenStreetMap, with the user's live location. Free, no API key required.
 // ===========================================================================
 class TrailMapPage extends StatefulWidget {
-  const TrailMapPage({super.key});
+  const TrailMapPage({
+    super.key,
+    this.destination,
+    this.destinationName,
+  });
+
+  /// Open with a walking route already drawn to this point.
+  ///
+  /// Used when someone picks a place from "Nearest to you": they asked to be
+  /// taken there, so the map arrives with the route on it rather than showing
+  /// every pin in the city and leaving them to find the one they chose.
+  final LatLng? destination;
+  final String? destinationName;
 
   @override
   State<TrailMapPage> createState() => _TrailMapPageState();
@@ -37,6 +49,19 @@ class _TrailMapPageState extends State<TrailMapPage> {
   WalkingRoute? _route;
   String? _routeTo;
   bool _routing = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final dest = widget.destination;
+    if (dest != null) {
+      // After the first frame: the route needs the map controller, and fitting
+      // the camera before the map has been laid out does nothing.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _drawRouteToDestination(dest, widget.destinationName ?? 'Destination');
+      });
+    }
+  }
 
   /// Gets the current position, asking for permission if needed. Returns null
   /// and explains why when it cannot — the caller just stops.

@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // whose "seen" list this is
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -6,6 +7,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'theme.dart';
 import 'motion.dart';
 import 'local_notifs.dart';
+import 'user_role.dart'; // who an announcement is addressed to
+import 'staff_access.dart'; // staff review everything, not just their own
 
 // ===========================================================================
 // Official City Announcements
@@ -37,6 +40,46 @@ const String kMayorTitle = 'City Mayor of Mandaluyong';
 const String kMayorFbPage = 'https://www.facebook.com/MenchieAbalosOfficial';
 const String kCityHallSite = 'https://mandaluyong.gov.ph/';
 
+/// Who an announcement is meant for.
+///
+/// Set by the staff member publishing it, because they know the audience and
+/// the app cannot guess. A road closure concerns residents; a festival concerns
+/// visitors; a typhoon advisory concerns everyone standing in the city.
+enum Audience { everyone, visitors, residents }
+
+Audience audienceFromId(String? id) => switch (id?.toLowerCase()) {
+      'visitors' || 'tourist' || 'tourists' => Audience.visitors,
+      'residents' || 'mandaleno' || 'mandaleño' => Audience.residents,
+      _ => Audience.everyone,
+    };
+
+extension AudienceInfo on Audience {
+  String get id => switch (this) {
+        Audience.everyone => 'everyone',
+        Audience.visitors => 'visitors',
+        Audience.residents => 'residents',
+      };
+
+  String get label => switch (this) {
+        Audience.everyone => 'Everyone',
+        Audience.visitors => 'Visitors only',
+        Audience.residents => 'Mandaleños only',
+      };
+
+  IconData get icon => switch (this) {
+        Audience.everyone => Icons.groups_outlined,
+        Audience.visitors => Icons.luggage_outlined,
+        Audience.residents => Icons.home_outlined,
+      };
+
+  /// Whether somebody with [role] should receive this.
+  bool reaches(UserRole role) => switch (this) {
+        Audience.everyone => true,
+        Audience.visitors => role == UserRole.tourist,
+        Audience.residents => role == UserRole.mandaleno,
+      };
+}
+
 class Announcement {
   final String id;
   final String title;
@@ -46,6 +89,9 @@ class Announcement {
   final bool pinned;
   final DateTime? publishedAt;
 
+  /// Who this was addressed to when it was published.
+  final Audience audience;
+
   const Announcement({
     required this.id,
     required this.title,
@@ -53,6 +99,7 @@ class Announcement {
     required this.category,
     required this.author,
     required this.pinned,
+    this.audience = Audience.everyone,
     this.publishedAt,
   });
 
@@ -67,6 +114,9 @@ class Announcement {
       category: (m['category'] ?? 'General').toString(),
       author: (m['author'] ?? 'City Government of Mandaluyong').toString(),
       pinned: m['pinned'] == true,
+      // Announcements published before audiences existed carry no field, and
+      // are treated as addressed to everyone — which is what they were.
+      audience: audienceFromId(m['audience']?.toString()),
       publishedAt: ts is Timestamp ? ts.toDate() : null,
     );
   }
@@ -92,10 +142,32 @@ class Announcement {
 class AnnouncementService {
   AnnouncementService._();
 
-  static const String _seenKey = 'seen_announcement_ids';
+  /// Scoped to the signed-in account.
+  ///
+  /// This was one key for the whole phone. Publishing an announcement as staff
+  /// marked it seen — for everyone — so signing back in as a resident on the
+  /// same handset produced no notification and no unread badge. The
+  /// announcement had arrived; the phone had simply already ticked it off on
+  /// somebody else's behalf. Exactly how it looks when testing on one device.
+  static String _seenKeyFor() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    return uid == null
+        ? 'seen_announcement_ids'
+        : 'seen_announcement_ids_$uid';
+  }
 
-  /// Live stream of announcements, newest first.
+  /// Live stream of the announcements addressed to this person, newest first.
   static Stream<List<Announcement>> stream() => FirebaseFirestore.instance
+      .collection(kAnnouncementCollection)
+      .orderBy('publishedAt', descending: true)
+      .limit(50)
+      .snapshots()
+      .map((s) => _forMe(s.docs));
+
+  /// Every announcement, whoever it was for. Staff see all of them, because
+  /// they are looking at what the office has sent rather than reading their
+  /// own notices.
+  static Stream<List<Announcement>> streamAll() => FirebaseFirestore.instance
       .collection(kAnnouncementCollection)
       .orderBy('publishedAt', descending: true)
       .limit(50)
@@ -105,17 +177,31 @@ class AnnouncementService {
   /// Ids already shown to this user, so nothing notifies twice.
   static Future<Set<String>> _seen() async {
     final prefs = await SharedPreferences.getInstance();
-    return (prefs.getStringList(_seenKey) ?? const <String>[]).toSet();
+    return (prefs.getStringList(_seenKeyFor()) ?? const <String>[]).toSet();
   }
 
   static Future<void> _markSeen(Iterable<String> ids) async {
     final prefs = await SharedPreferences.getInstance();
-    final all = (prefs.getStringList(_seenKey) ?? <String>[]).toSet()
-      ..addAll(ids);
-    await prefs.setStringList(_seenKey, all.toList());
+    final key = _seenKeyFor();
+    final all = (prefs.getStringList(key) ?? <String>[]).toSet()..addAll(ids);
+    await prefs.setStringList(key, all.toList());
   }
 
-  /// How many announcements this user hasn't opened yet.
+  /// Announcements addressed to the signed-in person, newest first.
+  ///
+  /// Filtered here rather than in the query: Firestore would need a composite
+  /// index to combine an audience filter with the ordering, and at this volume
+  /// reading fifty and discarding a few is not worth the extra configuration.
+  static List<Announcement> _forMe(
+      Iterable<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    final role = UserRoleStore.current;
+    return docs
+        .map(Announcement.fromDoc)
+        .where((a) => a.audience.reaches(role))
+        .toList();
+  }
+
+  /// How many announcements meant for this user they haven't opened yet.
   static Future<int> unreadCount() async {
     try {
       final snap = await FirebaseFirestore.instance
@@ -124,7 +210,7 @@ class AnnouncementService {
           .limit(50)
           .get();
       final seen = await _seen();
-      return snap.docs.where((d) => !seen.contains(d.id)).length;
+      return _forMe(snap.docs).where((a) => !seen.contains(a.id)).length;
     } catch (_) {
       return 0;
     }
@@ -141,17 +227,34 @@ class AnnouncementService {
           .get();
       if (snap.docs.isEmpty) return;
 
-      final seen = await _seen();
-      final fresh = snap.docs.where((d) => !seen.contains(d.id)).toList();
+      // Only what was addressed to this person.
+      final mine = _forMe(snap.docs);
+      if (mine.isEmpty) return;
 
-      // First run: don't spam the user with a backlog — just remember them.
+      final seen = await _seen();
+      var fresh = mine.where((a) => !seen.contains(a.id)).toList();
+
+      // First run for this account: don't announce a year's backlog. But
+      // anything published in the last day is genuinely news to them — and
+      // suppressing it outright was why a freshly signed-in resident heard
+      // nothing about an announcement sent minutes earlier.
       if (seen.isEmpty) {
-        await _markSeen(snap.docs.map((d) => d.id));
-        return;
+        final cutoff = DateTime.now().subtract(const Duration(days: 1));
+        final backlog = <String>[];
+        final recent = <Announcement>[];
+        for (final a in mine) {
+          if (a.publishedAt != null && a.publishedAt!.isAfter(cutoff)) {
+            recent.add(a);
+          } else {
+            backlog.add(a.id);
+          }
+        }
+        if (backlog.isNotEmpty) await _markSeen(backlog);
+        if (recent.isEmpty) return;
+        fresh = recent;
       }
 
-      for (final d in fresh.take(3)) {
-        final a = Announcement.fromDoc(d);
+      for (final a in fresh.take(3)) {
         await LocalNotifs.showNow(
           title: a.category.toLowerCase() == 'emergency'
               ? 'City advisory: ${a.title}'
@@ -161,7 +264,7 @@ class AnnouncementService {
               : a.body,
         );
       }
-      await _markSeen(fresh.map((d) => d.id));
+      await _markSeen(fresh.map((a) => a.id));
     } catch (_) {
       // Offline or rules issue — announcements simply don't notify.
     }
@@ -211,7 +314,12 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('City Announcements')),
       body: StreamBuilder<List<Announcement>>(
-        stream: AnnouncementService.stream(),
+        // Staff see everything the office has sent, whoever it was for —
+        // they are reviewing what went out, not reading their own notices.
+        // Everyone else sees only what was addressed to them.
+        stream: StaffAccess.isStaff
+            ? AnnouncementService.streamAll()
+            : AnnouncementService.stream(),
         builder: (context, snap) {
           final items = snap.data ?? [];
           if (items.isNotEmpty) {

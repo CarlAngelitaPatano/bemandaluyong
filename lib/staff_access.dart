@@ -56,6 +56,36 @@ class StaffAccess {
     'admin', // legacy accounts
   };
 
+  /// Sets [role] from the token exchange's answer, without waiting.
+  ///
+  /// [check] is asynchronous, so the first frame of the home screen is drawn
+  /// before it has finished — and draws the visitor dashboard, because that is
+  /// what [role] still says. An officer saw their own console flash into place
+  /// a second later, which reads as the app changing its mind.
+  ///
+  /// By the time the home screen is built the role is normally already in
+  /// hand: sign-in awaits the token exchange, and a remembered session loads
+  /// it from storage at startup. This applies what is already known, right
+  /// now, so the first frame is the right one. [check] still runs afterwards
+  /// and remains the authority.
+  ///
+  /// Returns true if a cached answer was available.
+  static bool applyCachedRole() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      role = CcatRole.none;
+      return true;
+    }
+    if (user.email?.toLowerCase() == kStaffEmail) {
+      role = CcatRole.staff;
+      return true;
+    }
+    final cached = TcimsApi.backendRole?.trim().toLowerCase();
+    if (cached == null || cached.isEmpty) return false;
+    role = _staffRoles.contains(cached) ? CcatRole.staff : CcatRole.none;
+    return true;
+  }
+
   /// Determines whether the signed-in account is CCAT staff.
   ///
   /// The backend's `users.role` is the authority. The app once kept its own

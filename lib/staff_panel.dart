@@ -166,6 +166,9 @@ class _StaffHomeViewState extends State<StaffHomeView> {
   int? _needsReport;
   int? _requests;
 
+  /// Events submitted but not yet cleared by the administrator.
+  int _awaitingApproval = 0;
+
   /// Every review the office holds. Filtered by [_period] for display, so
   /// changing the period costs nothing — no second request.
   List<_Review>? _reviews;
@@ -218,27 +221,27 @@ class _StaffHomeViewState extends State<StaffHomeView> {
 
   Future<void> _loadFirestore() async {
     try {
-      final db = FirebaseFirestore.instance;
-      final results = await Future.wait([
-        db.collection(kEventsCollection).get(),
-        db
-            .collection(kEventRequestCollection)
-            .where('status', isEqualTo: 'pending')
-            .get(),
-      ]);
-      final events = results[0].docs;
+      // Requests are still the app's own Firestore records; events moved to
+      // the shared database when they gained an approval step.
+      final pending = await FirebaseFirestore.instance
+          .collection(kEventRequestCollection)
+          .where('status', isEqualTo: 'pending')
+          .get();
+      final events = await EventsService.list();
       if (!mounted) return;
       setState(() {
-        _upcoming = events
-            .where((d) => (d.data()['status'] ?? 'upcoming') == 'upcoming')
-            .length;
+        _upcoming =
+            events.where((e) => e.status == EventStatus.upcoming).length;
         // Finished events that still have no report filed.
-        _needsReport = events.where((d) {
-          final m = d.data();
-          return (m['status'] ?? '') == 'completed' &&
-              (m['report'] ?? '').toString().trim().isEmpty;
-        }).length;
-        _requests = results[1].docs.length;
+        _needsReport = events
+            .where((e) =>
+                e.status == EventStatus.completed && e.report.trim().isEmpty)
+            .length;
+        // Events the office has not yet cleared — work the staff member is
+        // waiting on rather than work they owe.
+        _awaitingApproval =
+            events.where((e) => e.approval == EventApproval.pending).length;
+        _requests = pending.docs.length;
       });
     } catch (_) {
       // Permission or connectivity — tiles show a dash.
@@ -266,8 +269,10 @@ class _StaffHomeViewState extends State<StaffHomeView> {
           sentiment: (r['sentiment'] ?? 'neutral').toString().toLowerCase(),
           // mysqli returns every column as a string.
           rating: int.tryParse('${r['rating'] ?? ''}') ?? 0,
-          createdAt:
-              DateTime.tryParse('${r['created_at'] ?? ''}')?.toLocal(),
+          // UTC on the server, unmarked — see TcimsApi.parseServerTime. This
+          // drives the week/month filter and the "2 days ago" labels, so an
+          // eight-hour error here moved reviews across day boundaries.
+          createdAt: TcimsApi.parseServerTime(r['created_at']),
         ));
       }
 
@@ -474,6 +479,45 @@ class _StaffHomeViewState extends State<StaffHomeView> {
                       onPressed: () =>
                           _open(const EventRequestsReviewPage()),
                       child: const Text('Review'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+          // ---- Waiting on the administrator ----
+          // Not the officer's work, but they should know it is sitting there
+          // rather than wondering why an event never appeared publicly.
+          if (_awaitingApproval > 0)
+            Reveal(
+              delayMs: 35,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: AppSpacing.m),
+                padding: const EdgeInsets.all(AppSpacing.m),
+                decoration: BoxDecoration(
+                  color: AppTheme.brandGold.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(
+                      color: AppTheme.brandGold.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.hourglass_empty_rounded,
+                        color: Color(0xFF8A6A00), size: 20),
+                    const SizedBox(width: AppSpacing.s),
+                    Expanded(
+                      child: Text(
+                        '$_awaitingApproval event'
+                        '${_awaitingApproval == 1 ? '' : 's'} waiting for the '
+                        'administrator to approve',
+                        style: text.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF8A6A00)),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => _open(const EventsManagerPage()),
+                      child: const Text('View'),
                     ),
                   ],
                 ),
@@ -1033,6 +1077,7 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
   final _title = TextEditingController();
   final _body = TextEditingController();
   String _category = 'General';
+  Audience _audience = Audience.everyone;
   bool _pinned = false;
   bool _sending = false;
 
@@ -1055,6 +1100,10 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
         'title': _title.text.trim(),
         'body': _body.text.trim(),
         'category': _category,
+        // Who this is for. Decided by the officer writing it, since only they
+        // know whether a notice concerns residents, visitors, or the whole
+        // city standing in it.
+        'audience': _audience.id,
         'author': kAnnouncementPublisher,
         'pinned': _pinned,
         'publishedAt': FieldValue.serverTimestamp(),
@@ -1065,6 +1114,7 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
       _body.clear();
       setState(() {
         _category = 'General';
+        _audience = Audience.everyone;
         _pinned = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1136,6 +1186,47 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
                   DropdownMenuItem(value: c, child: Text(c)),
               ],
               onChanged: (v) => setState(() => _category = v ?? _category),
+            ),
+            const SizedBox(height: AppSpacing.m),
+            // Who receives it. Everyone by default, because most city notices
+            // concern everyone — but a festival aimed at visitors should not
+            // wake every resident, and a barangay advisory is not a tourist's
+            // business.
+            DropdownButtonFormField<Audience>(
+              initialValue: _audience,
+              decoration: const InputDecoration(
+                labelText: 'Send to',
+                prefixIcon: Icon(Icons.groups_outlined),
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final a in Audience.values)
+                  DropdownMenuItem(
+                    value: a,
+                    child: Row(
+                      children: [
+                        Icon(a.icon, size: 18),
+                        const SizedBox(width: AppSpacing.s),
+                        Text(a.label),
+                      ],
+                    ),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _audience = v ?? _audience),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              switch (_audience) {
+                Audience.everyone =>
+                  'Every signed-in person will be notified.',
+                Audience.visitors =>
+                  'Only visitors will see this. Mandaleños will not.',
+                Audience.residents =>
+                  'Only Mandaleños will see this. Visitors will not.',
+              },
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
             CheckboxListTile(
               value: _pinned,

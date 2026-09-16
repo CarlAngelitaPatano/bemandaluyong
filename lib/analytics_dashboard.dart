@@ -116,7 +116,9 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
         // quoted as collected data.
         source: m['import_batch'] == null ? '' : 'Imported',
         sentiment: sentiment,
-        createdAt: DateTime.tryParse('${m['created_at'] ?? ''}')?.toLocal(),
+        // UTC on the server, with no marker in the string — see
+        // TcimsApi.parseServerTime.
+        createdAt: TcimsApi.parseServerTime(m['created_at']),
       ));
     }
 

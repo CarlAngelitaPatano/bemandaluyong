@@ -31,6 +31,7 @@ import 'sentiment_eval.dart'; // NLP accuracy report
 import 'tcims_api.dart'; // shared TCIMS backend (MySQL) — auth + trail sync
 import 'app_features.dart'; // one shared catalogue of features per role
 import 'quick_menu.dart'; // floating menu button, reachable from any tab
+import 'session.dart'; // sign-out that clears every per-account cache
 
 void main() async {
   // Required before any async work in main().
@@ -44,6 +45,10 @@ void main() async {
   // first submission can time out; starting it here means it is already up by
   // the time anyone sends feedback or verifies a church. Never awaited.
   TcimsApi.warmUp();
+  // Restore the office's role for this account before anything is drawn, so a
+  // remembered staff session opens on the staff console rather than flashing
+  // the visitor dashboard first.
+  await TcimsApi.loadRole();
   // Restore saved Heritage Church Trail progress.
   await TrailProgress.load();
   // Restore the saved light/dark theme choice.
@@ -59,8 +64,9 @@ void main() async {
   final remember = prefs.getBool('remember_me') ?? false;
   final user = FirebaseAuth.instance.currentUser;
   if (user != null && !remember) {
-    // Not remembered — force a fresh login next time.
-    await FirebaseAuth.instance.signOut();
+    // Not remembered — force a fresh login next time, and clear the session
+    // properly rather than only ending the Firebase half of it.
+    await AppSession.signOut();
   }
   final isDemo = user?.email?.toLowerCase() == kDemoEmail;
   final autoLogin = remember &&
@@ -146,9 +152,25 @@ class _HomeShellState extends State<HomeShell> {
   /// visitors — so the index is derived rather than written down twice.
   int get _profileIndex => _pages.length - 1;
 
+  /// The selected tab, kept inside the range of the CURRENT tab set.
+  ///
+  /// Staff have four tabs and visitors two, and which set applies is only
+  /// known once the account's role comes back from the office — after this
+  /// screen has already been built and possibly navigated. Someone sitting on
+  /// the staff Profile tab (index 3) whose session then resolves to a visitor
+  /// would have had the app read _pages[3] from a two-item list and crash.
+  int get _safeIndex =>
+      _selectedIndex >= _pages.length ? 0 : _selectedIndex;
+
   @override
   void initState() {
     super.initState();
+    // Before the first frame, not after it. The role is already known by this
+    // point — sign-in awaits the token exchange, and a remembered session
+    // restores it at startup — so the home screen can be drawn correctly the
+    // first time instead of showing a visitor's dashboard to an officer for a
+    // second. StaffAccess.check() below still has the final say.
+    StaffAccess.applyCachedRole();
     // Demo account: keep the whole trail unlocked (also covers app restarts
     // where the demo session is still signed in). Real accounts reload their
     // actual saved progress, clearing any leftover demo unlock.
@@ -175,11 +197,12 @@ class _HomeShellState extends State<HomeShell> {
     // Load Tourist / Mandaleño so the dashboard shows the right content.
     UserRoleStore.load().then((role) {
       if (mounted) setState(() {});
-      // Official city announcements are a residents' channel, so only
-      // Mandaleños (and staff) are notified about new ones.
-      if (role == UserRole.mandaleno || StaffAccess.isStaff) {
-        AnnouncementService.checkForNew();
-      }
+      // Everyone is checked now. Who actually receives an announcement is
+      // decided by the announcement itself — the officer publishing it chooses
+      // whether it is for visitors, residents, or the whole city — so this no
+      // longer guesses on their behalf. The role has to be loaded first,
+      // because that is what the filtering compares against.
+      AnnouncementService.checkForNew();
     });
     _loadAvatar();
     _loadUnread();
@@ -192,7 +215,14 @@ class _HomeShellState extends State<HomeShell> {
     // read a role from a previous session, or none at all on a first sign-in,
     // and an officer would see the visitor app until they restarted.
     tokenReady.then((_) => StaffAccess.check()).then((_) {
-      if (mounted) setState(() {});
+      if (!mounted) return;
+      setState(() {
+        // The tab set has just changed shape. Land on Home rather than
+        // whatever index happened to be selected under the old one — tab two
+        // means Explore to a visitor and Events to an officer, and silently
+        // switching between them looks like the app jumped on its own.
+        _selectedIndex = 0;
+      });
     });
   }
 
@@ -305,7 +335,7 @@ class _HomeShellState extends State<HomeShell> {
           ),
         ],
       ),
-      body: _pages[_selectedIndex],
+      body: _pages[_safeIndex],
       // Services is the raised circle notched into the middle of the footer,
       // reachable from every tab rather than being a tab of its own.
       //
@@ -316,7 +346,7 @@ class _HomeShellState extends State<HomeShell> {
           StaffAccess.isStaff ? null : const QuickMenuButton(),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: _AppFooter(
-        selectedIndex: _selectedIndex,
+        selectedIndex: _safeIndex,
         onSelected: _onTab,
         showServices: !StaffAccess.isStaff,
         destinations: StaffAccess.isStaff

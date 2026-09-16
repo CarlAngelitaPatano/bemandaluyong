@@ -1,5 +1,5 @@
 import 'dart:math' as math;
-import 'dart:ui' show ImageFilter, lerpDouble;
+import 'dart:ui' show lerpDouble;
 
 import 'package:flutter/material.dart';
 
@@ -166,7 +166,18 @@ class _MenuOrb extends StatelessWidget {
 /// The launching navigator is captured before the sheet appears, so a chosen
 /// shortcut can close the sheet and then push its destination onto the page
 /// stack underneath rather than inside the dismissed overlay.
+/// True while a quick menu is on screen.
+///
+/// Without this, tapping the button repeatedly opened a sheet per tap. Each
+/// one paints a scrim at 96% opacity over the last, so three or four in quick
+/// succession stack into a solid black screen — and every one of them has to
+/// be dismissed separately before the app looks alive again.
+bool _menuOpen = false;
+
 void openQuickMenu(BuildContext context) {
+  if (_menuOpen) return;
+  _menuOpen = true;
+
   final launcher = Navigator.of(context);
 
   showGeneralDialog<void>(
@@ -196,31 +207,41 @@ void openQuickMenu(BuildContext context) {
         child: _QuickMenuSheet(animation: curved, launcher: launcher),
       );
     },
-  );
+    // Released however the sheet closed — the button, the corner X, the
+    // scrim, the back gesture, or a shortcut being chosen.
+  ).whenComplete(() => _menuOpen = false);
 }
 
 // ---------------------------------------------------------------------------
 // The sheet
 // ---------------------------------------------------------------------------
 
-class _QuickMenuSheet extends StatelessWidget {
+class _QuickMenuSheet extends StatefulWidget {
   const _QuickMenuSheet({required this.animation, required this.launcher});
 
   final Animation<double> animation;
   final NavigatorState launcher;
 
-  void _open(BuildContext context, AppFeature feature) {
-    Navigator.of(context).pop(); // close the sheet first
-    final page = feature.page;
-    if (page != null) {
-      launcher.push(MaterialPageRoute(builder: page));
-    }
-  }
-
   @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
+  State<_QuickMenuSheet> createState() => _QuickMenuSheetState();
+}
+
+class _QuickMenuSheetState extends State<_QuickMenuSheet> {
+  /// Built once, in initState.
+  ///
+  /// This matters more than it looks. showGeneralDialog calls its
+  /// transitionBuilder on EVERY FRAME of the opening animation, so this widget
+  /// was being constructed and built around forty times in the 720ms it takes
+  /// to open. Each build called cityServiceFeatures(), and that constructs the
+  /// announcements badge by calling AnnouncementService.unreadCount() — a
+  /// Firestore query. Forty queries per press of the button, none of them
+  /// visible, all of them billed.
+  ///
+  /// Holding the sections in state means the lists, and the futures inside
+  /// them, are made once per opening.
+  late final List<_Section> _sections = _buildSections();
+
+  List<_Section> _buildSections() {
     final role = UserRoleStore.current;
 
     // This menu is for visitors and residents only — staff reach their tools
@@ -231,28 +252,47 @@ class _QuickMenuSheet extends StatelessWidget {
     final explore = exploreFeatures(includeTrail: false);
     final city = cityServiceFeatures(role);
     final leadsWithCity = role == UserRole.mandaleno;
-    final sections = <_Section>[
+    return <_Section>[
       _Section(role.primarySectionTitle, leadsWithCity ? city : explore),
       _Section(role.secondarySectionTitle, leadsWithCity ? explore : city),
       _Section('Urgent', [emergencyFeature()]),
     ];
+  }
+
+  void _open(BuildContext context, AppFeature feature) {
+    Navigator.of(context).pop(); // close the sheet first
+    final page = feature.page;
+    if (page != null) {
+      widget.launcher.push(MaterialPageRoute(builder: page));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final animation = widget.animation;
+    final sections = _sections;
 
     return Material(
       type: MaterialType.transparency,
       child: Stack(
         children: [
-          // Frosted scrim — the page underneath stays faintly visible, which
-          // keeps the menu feeling like a layer rather than a new screen.
-          Positioned.fill(
-            child: BackdropFilter(
-              filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-              child: Container(
-                // Nearly opaque: enough of the page shows through to feel like
-                // a layer, not so much that text sits on a busy background.
-                color: colors.surface.withValues(alpha: 0.96),
-              ),
-            ),
-          ),
+          // A plain opaque scrim, not a frosted one.
+          //
+          // This was a full-screen BackdropFilter at sigma 18, sitting inside
+          // a ClipPath whose radius changes every frame — so the blur was
+          // re-rasterised, at a new size, sixty times a second, twice for
+          // every open and close. Opening and dismissing the menu several
+          // times quickly exhausted graphics memory and Android killed the
+          // app, which then restarted at the login screen. It looked like
+          // being signed out; it was a crash.
+          //
+          // Almost nothing was lost by removing it. The scrim sat at 96%
+          // opacity on top of the blur, so the expensive effect underneath was
+          // barely visible in the first place. The circular reveal is what
+          // makes the menu feel like it comes from the button, and that stays.
+          Positioned.fill(child: ColoredBox(color: colors.surface)),
 
           SafeArea(
             child: Column(
@@ -297,13 +337,7 @@ class _QuickMenuSheet extends StatelessWidget {
                 Expanded(
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(
-                      AppSpacing.l,
-                      0,
-                      AppSpacing.l,
-                      // Room for the closing button so the last row is never
-                      // hidden behind it.
-                      _kBloomExtent + AppSpacing.xxl,
-                    ),
+                        AppSpacing.l, 0, AppSpacing.l, AppSpacing.m),
                     children: [
                       // The flagship feature leads, with progress on it, so
                       // the sheet opens on something that says where you are
@@ -340,6 +374,13 @@ class _QuickMenuSheet extends StatelessWidget {
                     ],
                   ),
                 ),
+                // The strip the closing button sits in. Reserved as real
+                // layout rather than as padding under a floating widget: with
+                // padding alone the list still scrolled *beneath* the bloom,
+                // so at any midway scroll position two shortcuts were hidden
+                // behind it. Ending the list here means nothing ever passes
+                // under the button.
+                SizedBox(height: footerHeight(context) + _kBloomExtent / 2),
               ],
             ),
           ),
@@ -612,7 +653,8 @@ class _SectionBlock extends StatelessWidget {
         ),
       ),
       child: Container(
-        padding: const EdgeInsets.all(AppSpacing.l),
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.l, AppSpacing.l, AppSpacing.l, AppSpacing.m),
         decoration: BoxDecoration(
           // A solid container rather than a translucent one: over the blurred
           // page, a see-through card muddied the labels in both themes.
@@ -645,14 +687,18 @@ class _SectionBlock extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: AppSpacing.l),
+            const SizedBox(height: AppSpacing.m),
             GridView.count(
               crossAxisCount: 3,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              mainAxisSpacing: AppSpacing.l,
+              mainAxisSpacing: AppSpacing.m,
               crossAxisSpacing: AppSpacing.s,
-              childAspectRatio: 0.84,
+              // A cell is a 56px circle, a 6px gap and one or two lines of
+              // label — about 100px tall against a third of the width. The
+              // ratio was set well below that, so every cell reserved height
+              // nothing used and each section ended in a large empty band.
+              childAspectRatio: 1.06,
               children: [
                 for (var i = 0; i < section.features.length; i++)
                   _Shortcut(
@@ -741,25 +787,11 @@ class _ShortcutState extends State<_Shortcut> {
                     height: 56,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      // A gentle gradient instead of a flat wash, so each
-                      // circle has a little depth and catches the light.
-                      gradient: LinearGradient(
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                        colors: [
-                          tint.withValues(alpha: 0.28),
-                          tint.withValues(alpha: 0.10),
-                        ],
-                      ),
-                      // A soft shadow in the feature's own colour lifts the
-                      // circle off the card rather than outlining it.
-                      boxShadow: [
-                        BoxShadow(
-                          color: tint.withValues(alpha: 0.20),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
+                      // Flat and quiet. A coloured shadow behind each circle
+                      // made them appear lit from within — fine for a game,
+                      // wrong for a city government's app, where the surface
+                      // should stay still and let the content speak.
+                      color: tint.withValues(alpha: 0.13),
                     ),
                     child: Icon(f.icon, size: 26, color: tint),
                   ),
