@@ -12,6 +12,7 @@ import 'staff_access.dart'; // StaffAccess
 import 'event_requests.dart'; // kEventRequestCollection, review page
 import 'analytics_dashboard.dart'; // feedback analytics
 import 'announcements.dart'; // city announcements in the bell
+import 'events_manager.dart'; // newly approved city events
 import 'user_role.dart'; // who an announcement is addressed to
 
 // ===========================================================================
@@ -108,6 +109,7 @@ class NotificationService {
       icon: Icons.event_outlined,
       action: NotifAction.events,
     ));
+    // (Newly approved events are added by buildFor, which can read them.)
 
     return list;
   }
@@ -211,13 +213,39 @@ class NotificationService {
     }
   }
 
+  /// City events approved since this person last looked.
+  ///
+  /// Reads whatever [EventsService.checkForNewlyApproved] found — that call
+  /// also raises the phone notification, so the bell and the notification are
+  /// always about the same events rather than drifting apart.
+  static Future<List<AppNotification>> _newEvents() async {
+    final fresh = await EventsService.checkForNewlyApproved();
+    return fresh
+        .take(3)
+        .map((e) => AppNotification(
+              id: 'event_${e.id}',
+              title: 'New city event: ${e.title}',
+              body: e.venue.isEmpty
+                  ? e.dateLabel
+                  : '${e.dateLabel} · ${e.venue}',
+              icon: Icons.event_available_outlined,
+              action: NotifAction.events,
+            ))
+        .toList();
+  }
+
   /// The right feed for whoever is signed in, minus anything cleared away.
   static Future<List<AppNotification>> buildFor() async {
     final items = StaffAccess.isStaff
         ? await buildForStaff()
-        // Announcements lead: a notice from the city outranks a reminder the
-        // app generated about itself.
-        : [...await _announcements(), ...build()];
+        // Announcements lead — a notice from the city outranks anything the
+        // app generated about itself — then newly approved events, then the
+        // standing entries.
+        : [
+            ...await _announcements(),
+            ...await _newEvents(),
+            ...build(),
+          ];
 
     final gone = await dismissedIds();
     return items.where((n) => !gone.contains(n.id)).toList();
