@@ -6,6 +6,7 @@ import 'heritage.dart'; // HeritageTrailPage, HeritageChurchesView
 import 'attractions.dart'; // AttractionsPage
 import 'dining.dart'; // DiningPage
 import 'trail_map.dart'; // TrailMapPage
+import 'nearby.dart'; // what is closest to the person right now
 
 // ===========================================================================
 // Suggested Itineraries — ready-made plans for visitors, built from the
@@ -213,6 +214,14 @@ const List<Itinerary> kItineraries = [
   ),
 ];
 
+/// Small heading used to separate the two halves of this page.
+TextStyle? _sectionLabel(BuildContext context) =>
+    Theme.of(context).textTheme.labelSmall?.copyWith(
+          fontWeight: FontWeight.w800,
+          letterSpacing: 1.0,
+          color: Theme.of(context).colorScheme.outline,
+        );
+
 class ItineraryPage extends StatelessWidget {
   const ItineraryPage({super.key});
 
@@ -242,10 +251,20 @@ class ItineraryPage extends StatelessWidget {
               style: text.bodyMedium?.copyWith(color: colors.onSurfaceVariant),
             ),
           ),
+          const SizedBox(height: AppSpacing.l),
+          // What is around the person right now, above the ready-made plans.
+          // A different question from "what should I do today", and usually
+          // the more urgent one when someone is already out walking.
+          const Reveal(delayMs: 70, child: NearbyNowCard()),
           const SizedBox(height: AppSpacing.xl),
+          Reveal(
+            delayMs: 90,
+            child: Text('Ready-made plans', style: _sectionLabel(context)),
+          ),
+          const SizedBox(height: AppSpacing.m),
           for (int i = 0; i < kItineraries.length; i++)
             Reveal(
-              delayMs: 100 + i * 90,
+              delayMs: 120 + i * 90,
               child: _ItineraryCard(itinerary: kItineraries[i]),
             ),
           const SizedBox(height: AppSpacing.l),

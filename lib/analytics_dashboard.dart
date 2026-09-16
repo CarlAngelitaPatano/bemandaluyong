@@ -1,21 +1,30 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'theme.dart';
 import 'motion.dart';
 import 'sentiment.dart';
-import 'feedback_page.dart'; // FeedbackSchema
+import 'tcims_api.dart'; // the shared TCIMS database
 import 'sentiment_eval.dart'; // model accuracy report
 
 // ===========================================================================
 // Sentiment Analytics Dashboard
 //
-// Reads the visitor feedback stored in the shared Firestore database and
-// displays the sentiment analysis results alongside tourism statistics:
+// Reads visitor feedback from the SHARED TCIMS database — the same rows the
+// CCAT website's admin dashboard shows — and displays the sentiment analysis
+// results alongside tourism statistics:
 //   • overall positive / neutral / negative breakdown
 //   • average visitor rating
-//   • sentiment per feedback category
+//   • sentiment per place
 //   • the most recent comments with their classification
+//
+// This page used to read Firestore, which was correct until feedback moved to
+// the shared MySQL database. It meant staff saw one set of numbers in the app
+// while the website showed another, from the same office, about the same
+// reviews. One source now.
+//
+// The sentiment shown is whatever the SERVER recorded, so a review carries the
+// same classification wherever it is read. Only if a row somehow has no stored
+// label does the on-device analyser fill the gap.
 //
 // This is the CCAT-facing view of Objective 2.
 // ===========================================================================
@@ -40,34 +49,83 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
     _future = _load();
   }
 
+  /// Reads every review in the office's database.
+  ///
+  /// NOT `/api/feedback.php` — its GET is scoped to `user_id = <signed-in
+  /// account>`, so a staff member would receive only reviews they had written
+  /// themselves. That returns an empty list rather than an error, which would
+  /// have shown "No feedback yet" on a screen that was in fact broken.
+  ///
+  /// `crud.php?table=reviews` returns a bare JSON array of every review, the
+  /// same rows the website's admin dashboard reads. Without a `limit`
+  /// parameter the backend caps the response at 1000 rows (2000 with one);
+  /// at the current volume that is not a constraint, but it will need paging
+  /// if the corpus grows.
+  ///
+  /// Throws when the endpoint cannot be read or hands back something that is
+  /// not a list. That is deliberate: the page then says it could not load,
+  /// rather than rendering a confident set of zeroes that a staff member might
+  /// take for "no complaints this month".
   Future<List<_Entry>> _load() async {
-    final snap = await FirebaseFirestore.instance
-        .collection(FeedbackSchema.collection)
-        .orderBy(FeedbackSchema.fCreatedAt, descending: true)
-        .limit(300)
-        .get();
+    final raw = await TcimsApi.get('/api/crud.php?table=reviews');
 
-    return snap.docs.map((d) {
-      final m = d.data();
-      final text = (m[FeedbackSchema.fMessage] ?? '').toString();
-      // Use the stored label if present; otherwise classify on the fly, so
-      // feedback submitted by the website is also analysed here.
-      final stored = m[FeedbackSchema.fSentiment]?.toString();
+    if (raw is! List) {
+      throw StateError('Reviews endpoint did not return a list.');
+    }
+    final rows = raw;
+
+    final entries = <_Entry>[];
+    for (final row in rows) {
+      if (row is! Map) continue;
+      final m = row.cast<String, dynamic>();
+
+      final message = (m['comment'] ?? '').toString();
+
+      // `sentiment` is the official label — the lexicon classification the
+      // website also displays. The row carries an `ml_sentiment` alongside it,
+      // but that is a shadow-mode experiment running at lower accuracy and is
+      // deliberately NOT shown to staff: two different ratings for the same
+      // review, from the same office, is exactly the confusion this screen was
+      // rewritten to end.
+      final stored = m['sentiment']?.toString();
       final sentiment = (stored == null || stored.isEmpty)
-          ? SentimentAnalyzer.analyze(text).sentiment
+          ? SentimentAnalyzer.analyze(message).sentiment
           : sentimentFromId(stored);
-      final ts = m[FeedbackSchema.fCreatedAt];
-      return _Entry(
-        message: text,
-        rating: (m[FeedbackSchema.fRating] as num?)?.toInt() ?? 0,
-        category: (m[FeedbackSchema.fCategory] ?? 'Other').toString(),
-        subject: (m[FeedbackSchema.fSubject] ?? '').toString(),
-        name: (m[FeedbackSchema.fName] ?? 'Anonymous').toString(),
-        source: (m[FeedbackSchema.fSource] ?? '').toString(),
+
+      // Every number arrives as a string through mysqli, so parse rather than
+      // cast — otherwise the rating average silently becomes string
+      // concatenation.
+      final rating = int.tryParse('${m['rating'] ?? ''}') ?? 0;
+
+      final place = (m['place'] ?? '').toString();
+
+      // `reviewer` is blank on some rows, mostly imported ones.
+      final reviewer = (m['reviewer'] ?? '').toString().trim();
+
+      entries.add(_Entry(
+        message: message,
+        rating: rating,
+        // One "place" per review — the specific church, or the general
+        // category when the visitor did not name a site. It doubles as the
+        // grouping key here.
+        category: place.isEmpty ? 'General' : place,
+        subject: place,
+        name: reviewer.isEmpty ? 'Anonymous' : reviewer,
+        // Separates reviews captured through the app or website from rows
+        // brought in by a bulk import, which matters when these figures are
+        // quoted as collected data.
+        source: m['import_batch'] == null ? '' : 'Imported',
         sentiment: sentiment,
-        createdAt: ts is Timestamp ? ts.toDate() : null,
-      );
-    }).toList();
+        // UTC on the server, with no marker in the string — see
+        // TcimsApi.parseServerTime.
+        createdAt: TcimsApi.parseServerTime(m['created_at']),
+      ));
+    }
+
+    // Newest first, matching what the website shows.
+    entries.sort((a, b) => (b.createdAt ?? DateTime(1970))
+        .compareTo(a.createdAt ?? DateTime(1970)));
+    return entries;
   }
 
   Future<void> _refresh() async {
@@ -122,13 +180,23 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
               return ListView(
                 padding: const EdgeInsets.all(AppSpacing.xl),
                 children: [
+                  const SizedBox(height: AppSpacing.xxl),
                   Icon(Icons.cloud_off, size: 48, color: colors.outline),
                   const SizedBox(height: AppSpacing.l),
                   Text(
-                    'Could not load the feedback data. Check your internet '
-                    'connection and pull down to try again.',
+                    'Could not load the feedback data',
                     textAlign: TextAlign.center,
-                    style: text.bodyMedium,
+                    style: text.titleMedium,
+                  ),
+                  const SizedBox(height: AppSpacing.s),
+                  Text(
+                    'The office database could not be reached. Pull down to '
+                    'try again.\n\nNothing is shown rather than a partial '
+                    'count, so these figures are never mistaken for a quiet '
+                    'month.',
+                    textAlign: TextAlign.center,
+                    style: text.bodySmall
+                        ?.copyWith(color: colors.onSurfaceVariant),
                   ),
                 ],
               );
@@ -250,7 +318,7 @@ class _AnalyticsDashboardPageState extends State<AnalyticsDashboardPage> {
                 // ---- Per-category ----
                 Reveal(
                   delayMs: 200,
-                  child: Text('By category', style: text.titleMedium),
+                  child: Text('By place', style: text.titleMedium),
                 ),
                 const SizedBox(height: AppSpacing.m),
                 for (final entry in categories.entries)

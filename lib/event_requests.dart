@@ -434,22 +434,23 @@ class _RequestCard extends StatelessWidget {
       final publish = await showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('Publish as an event?'),
+          title: const Text('Add this to the city events?'),
           content: const Text(
-              'Open the event form pre-filled with this request so it appears '
-              'in the app for everyone.'),
+              'This creates a city event from the resident\'s request. It is '
+              'submitted to the administrator for approval before it appears '
+              'publicly.'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(context, false),
                 child: const Text('Later')),
             FilledButton(
                 onPressed: () => Navigator.pop(context, true),
-                child: const Text('Publish')),
+                child: const Text('Submit')),
           ],
         ),
       );
       if (publish == true && context.mounted) {
-        await EventsService.save(
+        final ok = await EventsService.save(
           title: request.title,
           description: request.description,
           venue: request.venue,
@@ -459,7 +460,11 @@ class _RequestCard extends StatelessWidget {
         );
         if (context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Published to the Events page')),
+            SnackBar(
+              content: Text(ok
+                  ? 'Submitted — waiting for the administrator to approve it'
+                  : 'Could not submit the event. Check your connection.'),
+            ),
           );
         }
       }

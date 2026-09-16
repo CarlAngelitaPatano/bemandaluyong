@@ -13,6 +13,7 @@ import 'event_requests.dart';
 import 'staff_report.dart';
 import 'local_notifs.dart';
 import 'staff_access.dart' show kAnnouncementPublisher;
+import 'tcims_api.dart'; // reviews come from the shared database, not Firestore
 
 // ===========================================================================
 // CCAT Staff console.
@@ -111,6 +112,48 @@ class StaffAlerts {
   }
 }
 
+/// How far back the console's figures look.
+///
+/// Queues — pending requests, unfiled reports, upcoming events — are not
+/// filtered by this: an event request from two months ago is still waiting
+/// today. It applies to what was *received* in a period, which is what an
+/// officer is reporting on when they say what happened.
+enum StaffPeriod {
+  week('This week', 7),
+  month('This month', 30),
+  all('All time', 0);
+
+  const StaffPeriod(this.label, this.days);
+  final String label;
+  final int days;
+
+  /// Null for [all] — everything counts.
+  DateTime? get since => days == 0
+      ? null
+      : DateTime.now().subtract(Duration(days: days));
+}
+
+/// One review, as the console needs it.
+class _Review {
+  const _Review({
+    required this.id,
+    required this.place,
+    required this.comment,
+    required this.sentiment,
+    required this.rating,
+    required this.createdAt,
+  });
+
+  final String id;
+  final String place;
+  final String comment;
+  final String sentiment; // lowercase: positive / neutral / negative
+  final int rating;
+  final DateTime? createdAt;
+
+  bool get isNegative => sentiment == 'negative';
+}
+
 class StaffHomeView extends StatefulWidget {
   const StaffHomeView({super.key});
 
@@ -121,8 +164,45 @@ class StaffHomeView extends StatefulWidget {
 class _StaffHomeViewState extends State<StaffHomeView> {
   int? _upcoming;
   int? _needsReport;
-  int? _feedback;
   int? _requests;
+
+  /// Events submitted but not yet cleared by the administrator.
+  int _awaitingApproval = 0;
+
+  /// Every review the office holds. Filtered by [_period] for display, so
+  /// changing the period costs nothing — no second request.
+  List<_Review>? _reviews;
+
+  /// Negative reviews the staff member has already dealt with.
+  Set<String> _handled = <String>{};
+
+  StaffPeriod _period = StaffPeriod.week;
+
+  static const String _handledKey = 'staff_handled_reviews';
+
+  /// Reviews inside the chosen period.
+  List<_Review> get _inPeriod {
+    final all = _reviews ?? const <_Review>[];
+    final since = _period.since;
+    if (since == null) return all;
+    return all
+        .where((r) => r.createdAt != null && r.createdAt!.isAfter(since))
+        .toList();
+  }
+
+  int? get _feedback => _reviews == null ? null : _inPeriod.length;
+  int get _positive =>
+      _inPeriod.where((r) => r.sentiment == 'positive').length;
+  int get _negative => _inPeriod.where((r) => r.isNegative).length;
+  int get _neutral => _inPeriod.length - _positive - _negative;
+
+  /// Negative reviews in the period that nobody has marked as handled —
+  /// the actual work, as opposed to the count.
+  List<_Review> get _needsAttention => _inPeriod
+      .where((r) => r.isNegative && !_handled.contains(r.id))
+      .toList()
+    ..sort((a, b) => (b.createdAt ?? DateTime(1970))
+        .compareTo(a.createdAt ?? DateTime(1970)));
 
   @override
   void initState() {
@@ -132,34 +212,87 @@ class _StaffHomeViewState extends State<StaffHomeView> {
   }
 
   Future<void> _load() async {
+    // Events and requests are Firestore records; feedback is not. Reviews live
+    // in the office's shared database, the same rows the website reports on —
+    // this tile used to count a Firestore collection that stopped being the
+    // real source, so the dashboard and the screen it opened disagreed.
+    await Future.wait([_loadFirestore(), _loadFeedback()]);
+  }
+
+  Future<void> _loadFirestore() async {
     try {
-      final db = FirebaseFirestore.instance;
-      final results = await Future.wait([
-        db.collection(kEventsCollection).get(),
-        db.collection('feedback').get(),
-        db
-            .collection(kEventRequestCollection)
-            .where('status', isEqualTo: 'pending')
-            .get(),
-      ]);
-      final events = results[0].docs;
+      // Requests are still the app's own Firestore records; events moved to
+      // the shared database when they gained an approval step.
+      final pending = await FirebaseFirestore.instance
+          .collection(kEventRequestCollection)
+          .where('status', isEqualTo: 'pending')
+          .get();
+      final events = await EventsService.list();
       if (!mounted) return;
       setState(() {
-        _upcoming = events
-            .where((d) => (d.data()['status'] ?? 'upcoming') == 'upcoming')
-            .length;
+        _upcoming =
+            events.where((e) => e.status == EventStatus.upcoming).length;
         // Finished events that still have no report filed.
-        _needsReport = events.where((d) {
-          final m = d.data();
-          return (m['status'] ?? '') == 'completed' &&
-              (m['report'] ?? '').toString().trim().isEmpty;
-        }).length;
-        _feedback = results[1].docs.length;
-        _requests = results[2].docs.length;
+        _needsReport = events
+            .where((e) =>
+                e.status == EventStatus.completed && e.report.trim().isEmpty)
+            .length;
+        // Events the office has not yet cleared — work the staff member is
+        // waiting on rather than work they owe.
+        _awaitingApproval =
+            events.where((e) => e.approval == EventApproval.pending).length;
+        _requests = pending.docs.length;
       });
     } catch (_) {
       // Permission or connectivity — tiles show a dash.
     }
+  }
+
+  Future<void> _loadFeedback() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final handled = prefs.getStringList(_handledKey)?.toSet() ?? <String>{};
+
+      final rows = await TcimsApi.get('/api/crud.php?table=reviews');
+      if (rows is! List || !mounted) return;
+
+      final parsed = <_Review>[];
+      for (final r in rows) {
+        if (r is! Map) continue;
+        final place = (r['place'] ?? '').toString();
+        parsed.add(_Review(
+          id: '${r['id'] ?? ''}',
+          place: place.isEmpty ? 'General' : place,
+          comment: (r['comment'] ?? '').toString(),
+          // The server's label, which is what the website shows for the same
+          // review. ml_sentiment is a shadow experiment and is not used here.
+          sentiment: (r['sentiment'] ?? 'neutral').toString().toLowerCase(),
+          // mysqli returns every column as a string.
+          rating: int.tryParse('${r['rating'] ?? ''}') ?? 0,
+          // UTC on the server, unmarked — see TcimsApi.parseServerTime. This
+          // drives the week/month filter and the "2 days ago" labels, so an
+          // eight-hour error here moved reviews across day boundaries.
+          createdAt: TcimsApi.parseServerTime(r['created_at']),
+        ));
+      }
+
+      setState(() {
+        _reviews = parsed;
+        _handled = handled;
+      });
+    } catch (_) {
+      // Offline, or the account is not permitted to read reviews — the tile
+      // keeps its dash rather than showing a zero that reads as "no feedback".
+    }
+  }
+
+  /// Marks a complaint as dealt with. Kept on the device rather than the
+  /// server: it records that *this officer* has seen it, which is a personal
+  /// working note, not a change to the review itself.
+  Future<void> _markHandled(String id) async {
+    setState(() => _handled = {..._handled, id});
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_handledKey, _handled.toList());
   }
 
   void _open(Widget page) {
@@ -169,9 +302,8 @@ class _StaffHomeViewState extends State<StaffHomeView> {
 
   /// One-line summary of what needs doing today.
   String _workloadLine() {
-    final pending = (_requests ?? 0) + (_needsReport ?? 0);
     if (_requests == null) return 'Loading your workload…';
-    if (pending == 0) return 'Nothing pending — you\'re all caught up';
+    final complaints = _needsAttention.length;
     final parts = <String>[];
     if ((_requests ?? 0) > 0) {
       parts.add('$_requests request${_requests == 1 ? '' : 's'}');
@@ -179,6 +311,13 @@ class _StaffHomeViewState extends State<StaffHomeView> {
     if ((_needsReport ?? 0) > 0) {
       parts.add('$_needsReport report${_needsReport == 1 ? '' : 's'}');
     }
+    // An unanswered complaint is work too — it used to be left out of this
+    // line entirely, so the header could say "all caught up" while people
+    // were waiting on a reply.
+    if (complaints > 0) {
+      parts.add('$complaints complaint${complaints == 1 ? '' : 's'}');
+    }
+    if (parts.isEmpty) return 'Nothing pending — you\'re all caught up';
     return '${parts.join(' · ')} waiting for you';
   }
 
@@ -346,6 +485,45 @@ class _StaffHomeViewState extends State<StaffHomeView> {
               ),
             ),
 
+          // ---- Waiting on the administrator ----
+          // Not the officer's work, but they should know it is sitting there
+          // rather than wondering why an event never appeared publicly.
+          if (_awaitingApproval > 0)
+            Reveal(
+              delayMs: 35,
+              child: Container(
+                margin: const EdgeInsets.only(bottom: AppSpacing.m),
+                padding: const EdgeInsets.all(AppSpacing.m),
+                decoration: BoxDecoration(
+                  color: AppTheme.brandGold.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(AppRadius.md),
+                  border: Border.all(
+                      color: AppTheme.brandGold.withValues(alpha: 0.5)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.hourglass_empty_rounded,
+                        color: Color(0xFF8A6A00), size: 20),
+                    const SizedBox(width: AppSpacing.s),
+                    Expanded(
+                      child: Text(
+                        '$_awaitingApproval event'
+                        '${_awaitingApproval == 1 ? '' : 's'} waiting for the '
+                        'administrator to approve',
+                        style: text.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: const Color(0xFF8A6A00)),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () => _open(const EventsManagerPage()),
+                      child: const Text('View'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
           // ---- Reports outstanding ----
           if ((_needsReport ?? 0) > 0)
             Reveal(
@@ -382,15 +560,51 @@ class _StaffHomeViewState extends State<StaffHomeView> {
               ),
             ),
 
+          // ---- Complaints waiting on someone ----
+          // Placed above the numbers on purpose: a count of negative reviews
+          // is information, but an unanswered complaint is work.
+          if (_needsAttention.isNotEmpty) ...[
+            Reveal(
+              delayMs: 50,
+              child: _AttentionList(
+                reviews: _needsAttention,
+                onHandled: _markHandled,
+                onOpen: () => _open(const AnalyticsDashboardPage()),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.l),
+          ],
+
           // ---- Metrics ----
           Reveal(
             delayMs: 60,
-            child: Text('AT A GLANCE',
-                style: text.labelSmall?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 1.0,
-                  color: colors.outline,
-                )),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('AT A GLANCE',
+                      style: text.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.0,
+                        color: colors.outline,
+                      )),
+                ),
+                // What "received" counts. Queues below are unaffected — a
+                // request from last month is still waiting today.
+                DropdownButton<StaffPeriod>(
+                  value: _period,
+                  underline: const SizedBox.shrink(),
+                  isDense: true,
+                  style: text.labelMedium?.copyWith(color: colors.primary),
+                  items: [
+                    for (final p in StaffPeriod.values)
+                      DropdownMenuItem(value: p, child: Text(p.label)),
+                  ],
+                  onChanged: (p) {
+                    if (p != null) setState(() => _period = p);
+                  },
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: AppSpacing.m),
           Reveal(
@@ -405,7 +619,7 @@ class _StaffHomeViewState extends State<StaffHomeView> {
                 ),
                 const SizedBox(width: AppSpacing.m),
                 _StaffStat(
-                  label: 'Feedback received',
+                  label: 'Feedback · ${_period.label.toLowerCase()}',
                   value: _feedback?.toString() ?? '—',
                   icon: Icons.forum_outlined,
                   onTap: () => _open(const AnalyticsDashboardPage()),
@@ -436,6 +650,20 @@ class _StaffHomeViewState extends State<StaffHomeView> {
               ],
             ),
           ),
+          // A one-line read on how visitors are feeling. Tapping opens the
+          // full breakdown.
+          if ((_feedback ?? 0) > 0) ...[
+            const SizedBox(height: AppSpacing.m),
+            Reveal(
+              delayMs: 140,
+              child: _SentimentBar(
+                positive: _positive,
+                neutral: _neutral,
+                negative: _negative,
+                onTap: () => _open(const AnalyticsDashboardPage()),
+              ),
+            ),
+          ],
           const SizedBox(height: AppSpacing.xxl),
 
           // ---- Tasks ----
@@ -514,6 +742,207 @@ String _today() {
   ];
   final d = DateTime.now();
   return '${d.day} ${months[d.month - 1]} ${d.year}';
+}
+
+/// The complaints nobody has dealt with yet.
+///
+/// A dashboard that reports "12 negative" tells an officer there is a problem
+/// but not what it is. This lists them — the place, when, and what was said —
+/// so the screen holds work rather than a statistic, and each one can be
+/// ticked off once it has been looked into.
+class _AttentionList extends StatelessWidget {
+  const _AttentionList({
+    required this.reviews,
+    required this.onHandled,
+    required this.onOpen,
+  });
+
+  final List<_Review> reviews;
+  final ValueChanged<String> onHandled;
+  final VoidCallback onOpen;
+
+  String _when(DateTime? d) {
+    if (d == null) return '';
+    final days = DateTime.now().difference(d).inDays;
+    if (days == 0) return 'today';
+    if (days == 1) return 'yesterday';
+    if (days < 7) return '$days days ago';
+    return '${d.day}/${d.month}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    // Three at a time — a wall of complaints is as unhelpful as a number.
+    final shown = reviews.take(3).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.l),
+      decoration: BoxDecoration(
+        color: AppTheme.cityRed.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(AppRadius.lg),
+        border: Border.all(color: AppTheme.cityRed.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.report_problem_outlined,
+                  color: AppTheme.cityRed, size: 20),
+              const SizedBox(width: AppSpacing.s),
+              Expanded(
+                child: Text(
+                  reviews.length == 1
+                      ? '1 complaint needs attention'
+                      : '${reviews.length} complaints need attention',
+                  style: text.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700, color: AppTheme.cityRed),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.m),
+          for (final r in shown)
+            Padding(
+              padding: const EdgeInsets.only(bottom: AppSpacing.m),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          r.place,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: text.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      Text(_when(r.createdAt),
+                          style: text.labelSmall
+                              ?.copyWith(color: colors.onSurfaceVariant)),
+                    ],
+                  ),
+                  if (r.comment.isNotEmpty)
+                    Text(
+                      r.comment,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.bodySmall
+                          ?.copyWith(color: colors.onSurfaceVariant),
+                    ),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => onHandled(r.id),
+                      icon: const Icon(Icons.check, size: 16),
+                      label: const Text('Mark as handled'),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (reviews.length > shown.length)
+            TextButton(
+              onPressed: onOpen,
+              child: Text('See all ${reviews.length} in Feedback'),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A single proportional bar showing how the city's feedback is running.
+///
+/// Three numbers on a dashboard would have to be read and compared; one bar is
+/// understood at a glance, which is the point of an at-a-glance panel.
+class _SentimentBar extends StatelessWidget {
+  const _SentimentBar({
+    required this.positive,
+    required this.neutral,
+    required this.negative,
+    required this.onTap,
+  });
+
+  final int positive;
+  final int neutral;
+  final int negative;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final total = positive + neutral + negative;
+    if (total == 0) return const SizedBox.shrink();
+
+    final success = AppTheme.successFor(Theme.of(context).brightness);
+    final share = (positive / total * 100).round();
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(AppRadius.lg),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(AppSpacing.l),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(AppRadius.lg),
+          border: Border.all(color: colors.outlineVariant),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Visitor sentiment',
+                      style: text.titleSmall
+                          ?.copyWith(fontWeight: FontWeight.w700)),
+                ),
+                Text('$share% positive',
+                    style: text.labelLarge?.copyWith(
+                        fontWeight: FontWeight.w800, color: success)),
+              ],
+            ),
+            const SizedBox(height: AppSpacing.m),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(AppRadius.pill),
+              child: SizedBox(
+                height: 10,
+                child: Row(
+                  children: [
+                    if (positive > 0)
+                      Expanded(flex: positive, child: ColoredBox(color: success)),
+                    if (neutral > 0)
+                      Expanded(
+                          flex: neutral,
+                          child: ColoredBox(color: colors.outlineVariant)),
+                    if (negative > 0)
+                      Expanded(
+                          flex: negative,
+                          child: const ColoredBox(color: AppTheme.cityRed)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: AppSpacing.s),
+            Text(
+              '$positive positive · $neutral neutral · $negative negative',
+              style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 class _StaffStat extends StatelessWidget {
@@ -648,6 +1077,7 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
   final _title = TextEditingController();
   final _body = TextEditingController();
   String _category = 'General';
+  Audience _audience = Audience.everyone;
   bool _pinned = false;
   bool _sending = false;
 
@@ -670,6 +1100,10 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
         'title': _title.text.trim(),
         'body': _body.text.trim(),
         'category': _category,
+        // Who this is for. Decided by the officer writing it, since only they
+        // know whether a notice concerns residents, visitors, or the whole
+        // city standing in it.
+        'audience': _audience.id,
         'author': kAnnouncementPublisher,
         'pinned': _pinned,
         'publishedAt': FieldValue.serverTimestamp(),
@@ -680,6 +1114,7 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
       _body.clear();
       setState(() {
         _category = 'General';
+        _audience = Audience.everyone;
         _pinned = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -751,6 +1186,47 @@ class _StaffAnnouncementPageState extends State<StaffAnnouncementPage> {
                   DropdownMenuItem(value: c, child: Text(c)),
               ],
               onChanged: (v) => setState(() => _category = v ?? _category),
+            ),
+            const SizedBox(height: AppSpacing.m),
+            // Who receives it. Everyone by default, because most city notices
+            // concern everyone — but a festival aimed at visitors should not
+            // wake every resident, and a barangay advisory is not a tourist's
+            // business.
+            DropdownButtonFormField<Audience>(
+              initialValue: _audience,
+              decoration: const InputDecoration(
+                labelText: 'Send to',
+                prefixIcon: Icon(Icons.groups_outlined),
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                for (final a in Audience.values)
+                  DropdownMenuItem(
+                    value: a,
+                    child: Row(
+                      children: [
+                        Icon(a.icon, size: 18),
+                        const SizedBox(width: AppSpacing.s),
+                        Text(a.label),
+                      ],
+                    ),
+                  ),
+              ],
+              onChanged: (v) => setState(() => _audience = v ?? _audience),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              switch (_audience) {
+                Audience.everyone =>
+                  'Every signed-in person will be notified.',
+                Audience.visitors =>
+                  'Only visitors will see this. Mandaleños will not.',
+                Audience.residents =>
+                  'Only Mandaleños will see this. Visitors will not.',
+              },
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
             ),
             CheckboxListTile(
               value: _pinned,

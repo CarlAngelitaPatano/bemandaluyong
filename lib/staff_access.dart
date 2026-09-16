@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'tcims_api.dart'; // the backend's own record of what this account is
+
 // ===========================================================================
 // CCAT access control (mobile app).
 //
@@ -38,7 +40,62 @@ class StaffAccess {
   /// True for any registered CCAT account.
   static bool get isStaff => role == CcatRole.staff;
 
+  /// Backend roles that may operate the CCAT tools.
+  ///
+  /// These accounts are created by an approver through the website's User
+  /// Management — the app cannot grant them, and a sign-in never changes the
+  /// role already on record.
+  /// Compared in lower case; the backend's own strings are "Super Admin",
+  /// "CCAT Admin", "CCAT Staff", and a legacy lower-case "admin" still held by
+  /// some older accounts. Casing is only relaxed for this comparison — a role
+  /// string is never re-cased before being sent anywhere.
+  static const Set<String> _staffRoles = {
+    'ccat staff',
+    'ccat admin',
+    'super admin',
+    'admin', // legacy accounts
+  };
+
+  /// Sets [role] from the token exchange's answer, without waiting.
+  ///
+  /// [check] is asynchronous, so the first frame of the home screen is drawn
+  /// before it has finished — and draws the visitor dashboard, because that is
+  /// what [role] still says. An officer saw their own console flash into place
+  /// a second later, which reads as the app changing its mind.
+  ///
+  /// By the time the home screen is built the role is normally already in
+  /// hand: sign-in awaits the token exchange, and a remembered session loads
+  /// it from storage at startup. This applies what is already known, right
+  /// now, so the first frame is the right one. [check] still runs afterwards
+  /// and remains the authority.
+  ///
+  /// Returns true if a cached answer was available.
+  static bool applyCachedRole() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      role = CcatRole.none;
+      return true;
+    }
+    if (user.email?.toLowerCase() == kStaffEmail) {
+      role = CcatRole.staff;
+      return true;
+    }
+    final cached = TcimsApi.backendRole?.trim().toLowerCase();
+    if (cached == null || cached.isEmpty) return false;
+    role = _staffRoles.contains(cached) ? CcatRole.staff : CcatRole.none;
+    return true;
+  }
+
   /// Determines whether the signed-in account is CCAT staff.
+  ///
+  /// The backend's `users.role` is the authority. The app once kept its own
+  /// `staff` collection in Firestore, which meant two registries that could
+  /// disagree about the same person; that is now only a fallback for when the
+  /// backend could not be reached.
+  ///
+  /// This decides what the app SHOWS. It is not a security control — every
+  /// staff endpoint is gated server-side, so an account that talked its way
+  /// past this would still be refused by the office.
   static Future<CcatRole> check() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) {
@@ -52,6 +109,17 @@ class StaffAccess {
       return role;
     }
 
+    // What the office says this account is.
+    final backend = (TcimsApi.backendRole ?? await TcimsApi.loadRole())
+        ?.trim()
+        .toLowerCase();
+    if (backend != null && backend.isNotEmpty) {
+      role = _staffRoles.contains(backend) ? CcatRole.staff : CcatRole.none;
+      return role;
+    }
+
+    // Offline, or the token exchange failed this session — fall back to the
+    // legacy Firestore registry rather than locking an officer out.
     try {
       final doc = await FirebaseFirestore.instance
           .collection(collection)

@@ -887,16 +887,31 @@ String monthName(int month) {
 
 /// Events created by CCAT staff in the app. Shown above the printed 2026
 /// calendar so newly announced activities appear immediately.
-class _StaffPublishedEvents extends StatelessWidget {
+class _StaffPublishedEvents extends StatefulWidget {
   const _StaffPublishedEvents();
+
+  @override
+  State<_StaffPublishedEvents> createState() => _StaffPublishedEventsState();
+}
+
+class _StaffPublishedEventsState extends State<_StaffPublishedEvents> {
+  // Held in a field, not created inside build(). A future built in build() is
+  // re-created on every rebuild — a fresh network request each time the page
+  // so much as changes theme or scrolls into a new layout.
+  //
+  // listPublic, not list. A staff member browsing this page carries a staff
+  // token, and the backend hands those accounts every event including the
+  // ones still awaiting approval — which would put half-written, unapproved
+  // entries in the listing a visitor reads.
+  final Future<List<CityEvent>> _future = EventsService.listPublic();
 
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
 
-    return StreamBuilder<List<CityEvent>>(
-      stream: EventsService.stream(),
+    return FutureBuilder<List<CityEvent>>(
+      future: _future,
       builder: (context, snap) {
         final events = (snap.data ?? [])
             .where((e) => e.status != EventStatus.cancelled)

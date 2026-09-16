@@ -29,8 +29,10 @@ class TcimsApi {
       'https://tourism-cultural-information-management-kof5.onrender.com/my-app-backend';
 
   static const String _tokenKey = 'tcims_api_token';
+  static const String _roleKey = 'tcims_api_role';
 
   static String? _cachedToken;
+  static String? _cachedRole;
 
   /// The current session token, if any (cached in memory after first read).
   static Future<String?> get token async {
@@ -46,14 +48,65 @@ class TcimsApi {
     await prefs.setString(_tokenKey, token);
   }
 
+  /// The role the BACKEND holds for this account — "Tourist",
+  /// "Establishment", "CCAT Staff", "CCAT Admin" or "Super Admin".
+  ///
+  /// This is the authoritative answer to "what is this person allowed to do".
+  /// The app cannot influence it: staff and admin accounts are created by an
+  /// approver through the website's User Management, and the login endpoint
+  /// keeps whatever role is already on record. Read it, never assert it.
+  static String? get backendRole => _cachedRole;
+
+  static Future<void> _setRole(String? role) async {
+    _cachedRole = role;
+    final prefs = await SharedPreferences.getInstance();
+    if (role == null || role.isEmpty) {
+      await prefs.remove(_roleKey);
+    } else {
+      await prefs.setString(_roleKey, role);
+    }
+  }
+
+  /// Restores the cached role after a cold start, before any login call.
+  static Future<String?> loadRole() async {
+    if (_cachedRole != null) return _cachedRole;
+    final prefs = await SharedPreferences.getInstance();
+    _cachedRole = prefs.getString(_roleKey);
+    return _cachedRole;
+  }
+
   /// Clears the cached session (e.g. after a 401, or on sign-out).
   static Future<void> clearToken() async {
     _cachedToken = null;
+    _cachedRole = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
+    await prefs.remove(_roleKey);
   }
 
   static bool get isSignedIn => _cachedToken != null;
+
+  // -------------------------------------------------------------------------
+  // Timestamps
+  // -------------------------------------------------------------------------
+
+  /// Parses a datetime the backend returned, in Manila time.
+  ///
+  /// The server stores and returns UTC, but writes it as "2026-09-11 03:17:20"
+  /// with no zone marker. Dart reads an unmarked string as LOCAL time, so
+  /// calling .toLocal() on it does nothing at all — every timestamp in the app
+  /// was being shown eight hours early, quietly, with nothing to suggest it.
+  ///
+  /// Marking it UTC before converting is the whole fix.
+  static DateTime? parseServerTime(Object? raw) {
+    final s = raw?.toString().trim();
+    if (s == null || s.isEmpty) return null;
+    // Already carries a zone (ISO-8601 with Z or an offset)? Trust it.
+    if (s.endsWith('Z') || RegExp(r'[+-]\d{2}:?\d{2}$').hasMatch(s)) {
+      return DateTime.tryParse(s)?.toLocal();
+    }
+    return DateTime.tryParse('${s.replaceFirst(' ', 'T')}Z')?.toLocal();
+  }
 
   // -------------------------------------------------------------------------
   // Cold starts
@@ -90,7 +143,15 @@ class TcimsApi {
   /// callers should treat that as "backend features are unavailable this
   /// session" rather than blocking the sign-in itself; Firebase is still the
   /// source of truth for whether the person is logged in.
-  static Future<bool> exchangeFirebaseToken({String role = 'Tourist'}) async {
+  /// No `role` is sent, deliberately.
+  ///
+  /// The backend whitelists a client-supplied role to Tourist or Establishment
+  /// and ignores it entirely for accounts that already exist, so sending one
+  /// could never have granted privilege — but there is no reason for a client
+  /// to state its own permissions at all. Staff and admin accounts are created
+  /// by an approver in the website's User Management; this call simply finds
+  /// the account and is told what it is.
+  static Future<bool> exchangeFirebaseToken() async {
     try {
       final user = FirebaseAuth.instance.currentUser;
       if (user == null) return false;
@@ -101,7 +162,7 @@ class TcimsApi {
           .post(
             Uri.parse('$baseUrl/api/firebase_login.php'),
             headers: const {'Content-Type': 'application/json'},
-            body: jsonEncode({'idToken': idToken, 'role': role}),
+            body: jsonEncode({'idToken': idToken}),
           )
           .timeout(const Duration(seconds: 20));
 
@@ -110,6 +171,9 @@ class TcimsApi {
       final apiToken = data['user']?['api_token'] as String?;
       if (apiToken == null || apiToken.isEmpty) return false;
       await _setToken(apiToken);
+      // Whatever the office says this account is. Used to decide which parts
+      // of the app to show — the server enforces the rest regardless.
+      await _setRole(data['user']?['role'] as String?);
       return true;
     } catch (_) {
       // Offline, backend down, or (for phone sign-ins) no email on the
@@ -173,6 +237,73 @@ class TcimsApi {
       return jsonDecode(res.body);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// PUT a JSON body. Returns the decoded body on 200, or null on failure.
+  static Future<dynamic> put(String path, Map<String, dynamic> body) async {
+    try {
+      final res = await http
+          .put(
+            Uri.parse('$baseUrl$path'),
+            headers: await _authHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 35));
+      if (res.statusCode == 401) {
+        await clearToken();
+        return null;
+      }
+      if (res.statusCode != 200) return null;
+      return jsonDecode(res.body);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// DELETE. Returns true when the server confirms the record is gone.
+  static Future<bool> delete(String path) async {
+    try {
+      final res = await http
+          .delete(Uri.parse('$baseUrl$path'), headers: await _authHeaders())
+          .timeout(const Duration(seconds: 25));
+      if (res.statusCode == 401) {
+        await clearToken();
+        return false;
+      }
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// POST that reports the HTTP status alongside the body.
+  ///
+  /// [post] collapses every failure into null, which is fine when the only
+  /// question is "did it work". Some endpoints fail for reasons worth telling
+  /// the person apart — a rate limit is not a validation error, and neither is
+  /// being offline. Status 0 means the request never completed.
+  static Future<({int status, dynamic body})> postWithStatus(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    try {
+      final res = await http
+          .post(
+            Uri.parse('$baseUrl$path'),
+            headers: await _authHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(const Duration(seconds: 35));
+      dynamic parsed;
+      try {
+        parsed = jsonDecode(res.body);
+      } catch (_) {
+        parsed = null;
+      }
+      return (status: res.statusCode, body: parsed);
+    } catch (_) {
+      return (status: 0, body: null);
     }
   }
 

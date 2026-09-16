@@ -7,9 +7,12 @@ import 'city_content.dart'; // EventsPage
 import 'news_page.dart'; // NewsPage
 import 'motion.dart'; // Reveal animation
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart'; // whose read list this is
 import 'staff_access.dart'; // StaffAccess
 import 'event_requests.dart'; // kEventRequestCollection, review page
 import 'analytics_dashboard.dart'; // feedback analytics
+import 'announcements.dart'; // city announcements in the bell
+import 'user_role.dart'; // who an announcement is addressed to
 
 // ===========================================================================
 // In-app notifications.
@@ -19,7 +22,15 @@ import 'analytics_dashboard.dart'; // feedback analytics
 // ===========================================================================
 
 /// Where a notification takes the user when tapped.
-enum NotifAction { none, trail, events, news, feedback, eventRequests }
+enum NotifAction {
+  none,
+  trail,
+  events,
+  news,
+  feedback,
+  eventRequests,
+  announcements,
+}
 
 class AppNotification {
   final String id;
@@ -40,7 +51,16 @@ class AppNotification {
 class NotificationService {
   NotificationService._();
 
-  static const String _readKey = 'read_notifications';
+  /// Scoped to the signed-in account.
+  ///
+  /// One key for the whole phone meant that reading a notification as one
+  /// account marked it read for the next person to sign in — the same fault
+  /// that hid announcements when they were published from a staff session and
+  /// checked from another account on the same handset.
+  static String _readKeyFor() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    return uid == null ? 'read_notifications' : 'read_notifications_$uid';
+  }
 
   /// Builds the current notification list from app state.
   /// IDs are stable, except the trail one encodes progress so each new
@@ -151,15 +171,104 @@ class NotificationService {
     return list;
   }
 
-  /// The right feed for whoever is signed in.
+  /// City announcements addressed to the signed-in person, newest first.
+  ///
+  /// These arrive as a phone notification when the app opens, but that is a
+  /// moment that passes — someone who misses it, or reads it hours later, has
+  /// nowhere to look. The bell is that place, for visitors and residents
+  /// alike; which of them actually sees a given notice is decided by the
+  /// audience the officer chose when publishing it.
+  static Future<List<AppNotification>> _announcements() async {
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection(kAnnouncementCollection)
+          .orderBy('publishedAt', descending: true)
+          .limit(20)
+          .get();
+
+      final role = UserRoleStore.current;
+      return snap.docs
+          .map(Announcement.fromDoc)
+          .where((a) => a.audience.reaches(role))
+          .take(5)
+          .map((a) => AppNotification(
+                // Stable, and tied to the document — so marking one read does
+                // not mark the next one read too.
+                id: 'ann_${a.id}',
+                title: a.category.toLowerCase() == 'emergency'
+                    ? 'City advisory: ${a.title}'
+                    : a.title,
+                body: a.body.length > 140
+                    ? '${a.body.substring(0, 137)}…'
+                    : a.body,
+                icon: Icons.campaign_outlined,
+                action: NotifAction.announcements,
+              ))
+          .toList();
+    } catch (_) {
+      // Offline or rules — the rest of the feed still works.
+      return const [];
+    }
+  }
+
+  /// The right feed for whoever is signed in, minus anything cleared away.
   static Future<List<AppNotification>> buildFor() async {
-    if (StaffAccess.isStaff) return buildForStaff();
-    return build();
+    final items = StaffAccess.isStaff
+        ? await buildForStaff()
+        // Announcements lead: a notice from the city outranks a reminder the
+        // app generated about itself.
+        : [...await _announcements(), ...build()];
+
+    final gone = await dismissedIds();
+    return items.where((n) => !gone.contains(n.id)).toList();
+  }
+
+  /// Notifications this person has cleared away.
+  ///
+  /// The feed is derived from current state rather than stored, so a deleted
+  /// notification would otherwise be rebuilt on the next open. Remembering the
+  /// ids is what makes "delete" mean anything. Scoped per account, like
+  /// everything else about a person.
+  static String _dismissedKeyFor() {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    return uid == null
+        ? 'dismissed_notifications'
+        : 'dismissed_notifications_$uid';
+  }
+
+  static Future<Set<String>> dismissedIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_dismissedKeyFor()) ?? const <String>[])
+        .toSet();
+  }
+
+  /// Removes one notification from the feed for good.
+  static Future<void> dismiss(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _dismissedKeyFor();
+    final ids = (prefs.getStringList(key) ?? <String>[]).toSet()..add(id);
+    await prefs.setStringList(key, ids.toList());
+  }
+
+  /// Puts one back, for an undo.
+  static Future<void> restore(String id) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _dismissedKeyFor();
+    final ids = (prefs.getStringList(key) ?? <String>[]).toSet()..remove(id);
+    await prefs.setStringList(key, ids.toList());
+  }
+
+  /// Clears the whole feed.
+  static Future<void> dismissAll(Iterable<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = _dismissedKeyFor();
+    final all = (prefs.getStringList(key) ?? <String>[]).toSet()..addAll(ids);
+    await prefs.setStringList(key, all.toList());
   }
 
   static Future<Set<String>> readIds() async {
     final prefs = await SharedPreferences.getInstance();
-    return (prefs.getStringList(_readKey) ?? const <String>[]).toSet();
+    return (prefs.getStringList(_readKeyFor()) ?? const <String>[]).toSet();
   }
 
   static Future<int> unreadCount() async {
@@ -170,16 +279,16 @@ class NotificationService {
 
   static Future<void> markRead(String id) async {
     final prefs = await SharedPreferences.getInstance();
-    final ids = (prefs.getStringList(_readKey) ?? <String>[]).toSet()..add(id);
-    await prefs.setStringList(_readKey, ids.toList());
+    final ids = (prefs.getStringList(_readKeyFor()) ?? <String>[]).toSet()..add(id);
+    await prefs.setStringList(_readKeyFor(), ids.toList());
   }
 
   static Future<void> markAllRead() async {
     final prefs = await SharedPreferences.getInstance();
     final items = await buildFor();
-    final ids = (prefs.getStringList(_readKey) ?? <String>[]).toSet()
+    final ids = (prefs.getStringList(_readKeyFor()) ?? <String>[]).toSet()
       ..addAll(items.map((n) => n.id));
-    await prefs.setStringList(_readKey, ids.toList());
+    await prefs.setStringList(_readKeyFor(), ids.toList());
   }
 }
 
@@ -217,6 +326,60 @@ class _NotificationsPageState extends State<NotificationsPage> {
     await _load();
   }
 
+  Future<void> _markRead(AppNotification n) async {
+    await NotificationService.markRead(n.id);
+    await _load();
+  }
+
+  /// Removes one, with a way back.
+  ///
+  /// Offered as an undo rather than a confirmation dialog: deleting a
+  /// notification is not consequential enough to interrupt someone for, but it
+  /// is easy to do by accident on a list you are swiping through.
+  Future<void> _delete(AppNotification n) async {
+    await NotificationService.dismiss(n.id);
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Notification removed'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () async {
+            await NotificationService.restore(n.id);
+            await _load();
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _clearAll() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear all notifications?'),
+        content: const Text(
+          'They will be removed from this list. City announcements can still '
+          'be read any time from Announcements.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear all'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await NotificationService.dismissAll(_items.map((n) => n.id));
+    await _load();
+  }
+
   Future<void> _open(AppNotification n) async {
     await NotificationService.markRead(n.id);
     if (!mounted) return;
@@ -227,6 +390,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       NotifAction.news => const NewsPage(),
       NotifAction.feedback => const AnalyticsDashboardPage(),
       NotifAction.eventRequests => const EventRequestsReviewPage(),
+      NotifAction.announcements => const AnnouncementsPage(),
       NotifAction.none => null,
     };
 
@@ -252,28 +416,88 @@ class _NotificationsPageState extends State<NotificationsPage> {
               onPressed: _markAllRead,
               child: const Text('Mark all read'),
             ),
+          if (_items.isNotEmpty)
+            PopupMenuButton<String>(
+              tooltip: 'More',
+              onSelected: (v) {
+                if (v == 'clear') _clearAll();
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: 'clear',
+                  child: ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(Icons.delete_sweep_outlined),
+                    title: Text('Clear all'),
+                  ),
+                ),
+              ],
+            ),
         ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.separated(
-              padding: const EdgeInsets.all(AppSpacing.l),
-              itemCount: _items.length,
-              separatorBuilder: (_, _) => const SizedBox(height: AppSpacing.m),
-              itemBuilder: (context, i) {
-                final n = _items[i];
-                final isUnread = !_read.contains(n.id);
-                // Cards cascade in one after another.
-                return Reveal(
-                  delayMs: 50 + i * 70,
-                  child: _NotificationCard(
-                    notification: n,
-                    unread: isUnread,
-                    onTap: () => _open(n),
-                  ),
-                );
-              },
-            ),
+          : _items.isEmpty
+              ? _empty(context)
+              : ListView.separated(
+                  padding: const EdgeInsets.all(AppSpacing.l),
+                  itemCount: _items.length,
+                  separatorBuilder: (_, _) =>
+                      const SizedBox(height: AppSpacing.m),
+                  itemBuilder: (context, i) {
+                    final n = _items[i];
+                    final isUnread = !_read.contains(n.id);
+                    // Swipe to remove, with the same undo the menu offers.
+                    return Dismissible(
+                      key: ValueKey(n.id),
+                      direction: DismissDirection.endToStart,
+                      background: Container(
+                        alignment: Alignment.centerRight,
+                        padding:
+                            const EdgeInsets.only(right: AppSpacing.xl),
+                        decoration: BoxDecoration(
+                          color: AppTheme.cityRed.withValues(alpha: 0.12),
+                          borderRadius:
+                              BorderRadius.circular(AppRadius.lg),
+                        ),
+                        child: const Icon(Icons.delete_outline,
+                            color: AppTheme.cityRed),
+                      ),
+                      onDismissed: (_) => _delete(n),
+                      child: Reveal(
+                        delayMs: 50 + i * 70,
+                        child: _NotificationCard(
+                          notification: n,
+                          unread: isUnread,
+                          onTap: () => _open(n),
+                          onMarkRead: isUnread ? () => _markRead(n) : null,
+                          onDelete: () => _delete(n),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+    );
+  }
+
+  Widget _empty(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    return ListView(
+      padding: const EdgeInsets.all(AppSpacing.xxl),
+      children: [
+        const SizedBox(height: AppSpacing.xxl),
+        Icon(Icons.notifications_none_rounded, size: 56, color: colors.outline),
+        const SizedBox(height: AppSpacing.l),
+        Text('Nothing new',
+            textAlign: TextAlign.center, style: text.titleMedium),
+        const SizedBox(height: AppSpacing.s),
+        Text(
+          'City announcements and updates will appear here.',
+          textAlign: TextAlign.center,
+          style: text.bodySmall?.copyWith(color: colors.onSurfaceVariant),
+        ),
+      ],
     );
   }
 }
@@ -283,11 +507,17 @@ class _NotificationCard extends StatelessWidget {
     required this.notification,
     required this.unread,
     required this.onTap,
+    this.onMarkRead,
+    this.onDelete,
   });
 
   final AppNotification notification;
   final bool unread;
   final VoidCallback onTap;
+
+  /// Null once it has been read — there is nothing left to mark.
+  final VoidCallback? onMarkRead;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -343,6 +573,37 @@ class _NotificationCard extends StatelessWidget {
                   ),
                 ),
               ],
+              // The same two actions the swipe offers, for anyone who does not
+              // know to swipe — which on a civic app is most people.
+              if (onMarkRead != null || onDelete != null)
+                PopupMenuButton<String>(
+                  tooltip: 'Options',
+                  icon: Icon(Icons.more_vert, size: 20, color: colors.outline),
+                  onSelected: (v) {
+                    if (v == 'read') onMarkRead?.call();
+                    if (v == 'delete') onDelete?.call();
+                  },
+                  itemBuilder: (context) => [
+                    if (onMarkRead != null)
+                      const PopupMenuItem(
+                        value: 'read',
+                        child: ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(Icons.done_all),
+                          title: Text('Mark as read'),
+                        ),
+                      ),
+                    if (onDelete != null)
+                      const PopupMenuItem(
+                        value: 'delete',
+                        child: ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(Icons.delete_outline),
+                          title: Text('Delete'),
+                        ),
+                      ),
+                  ],
+                ),
             ],
           ),
         ),
