@@ -1,8 +1,11 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'theme.dart';
 import 'motion.dart';
 import 'tcims_api.dart';
+import 'local_notifs.dart'; // phone notification for newly approved events
 
 // ===========================================================================
 // City Events — created by CCAT staff, cleared by an administrator.
@@ -232,6 +235,58 @@ class EventsService {
     events.sort((a, b) => (a.startsAt ?? DateTime(2100))
         .compareTo(b.startsAt ?? DateTime(2100)));
     return events;
+  }
+
+  /// Raises a notification for events the office has approved since this
+  /// person last looked, and returns them for the notification bell.
+  ///
+  /// The moment that matters is APPROVAL, not submission. An event a staff
+  /// member has just written is not public yet — telling the city about it
+  /// would be announcing something the administrator may still turn down.
+  ///
+  /// Like announcements, this can only notice new events when the app opens:
+  /// there is no push server, so nothing arrives while the app is closed.
+  static Future<List<CityEvent>> checkForNewlyApproved() async {
+    try {
+      final approved = await listPublic();
+      if (approved.isEmpty) return const [];
+
+      final prefs = await SharedPreferences.getInstance();
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      // Per account, like everything else kept about a person.
+      final key = uid == null ? 'seen_events' : 'seen_events_$uid';
+      final seen = (prefs.getStringList(key) ?? const <String>[]).toSet();
+
+      final fresh = approved.where((e) => !seen.contains(e.id)).toList();
+
+      // First run for this account: remember the existing calendar quietly
+      // rather than announcing a year of events one after another.
+      if (seen.isEmpty) {
+        await prefs.setStringList(key, approved.map((e) => e.id).toList());
+        return const [];
+      }
+      if (fresh.isEmpty) return const [];
+
+      // Three at most. A staff member clearing a backlog of approvals should
+      // not set off a dozen notifications on every phone in the city.
+      for (final e in fresh.take(3)) {
+        await LocalNotifs.showNow(
+          title: 'New city event: ${e.title}',
+          body: e.venue.isEmpty
+              ? e.dateLabel
+              : '${e.dateLabel} · ${e.venue}',
+        );
+      }
+
+      await prefs.setStringList(
+        key,
+        {...seen, ...approved.map((e) => e.id)}.toList(),
+      );
+      return fresh;
+    } catch (_) {
+      // Offline, or not permitted to read events — nothing is announced.
+      return const [];
+    }
   }
 
   /// Only what the public may see.
